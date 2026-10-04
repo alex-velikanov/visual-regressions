@@ -1,0 +1,83 @@
+// A tiny website for the vr browser tests: one page per behaviour the vr scripts must handle.
+// startSite() -> { main, other, visited, setMode, close }. `main` and `other` are base URLs (two origins).
+import http from 'http';
+
+const page = (body, head = '') => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>t</title>
+<style>body{margin:0;font:20px sans-serif}nav{background:#123;color:#fff;padding:14px}h1{margin:20px}.hero{padding:30px;background:#cde}</style>${head}</head><body>${body}</body></html>`;
+
+export async function startSite() {
+  const visited = new Set();
+  let mode = 'normal';
+  let clock = 0;
+  let mainUrl = '';
+  let otherUrl = '';
+
+  const send = (res, status, body, type = 'text/html') => { res.statusCode = status; res.setHeader('content-type', type); res.end(body); };
+  const redirect = (res, to) => { res.statusCode = 302; res.setHeader('location', to); res.end(); };
+
+  const mainServer = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://x');
+    const path = url.pathname;
+    visited.add(path);
+    switch (path) {
+      case '/':
+        return send(res, 200, page(`<nav>home</nav><h1>Home</h1>
+          <a href="/about/">about</a> <a href="/logout">logout</a> <a href="/gone">gone</a> <a href="/old">old</a>
+          <a href="/missing">missing</a> <a href="/tall">tall</a> <a href="/file.pdf">pdf</a> <a href="/ok">ok</a>
+          <a href="${otherUrl}/landing">external</a> <a href="mailto:a@b.c">mail</a>`));
+      case '/about/': case '/about': case '/ok': case '/new': case '/sitemap-only': case '/logout': case '/file.pdf':
+        return send(res, 200, page(`<nav>site</nav><h1>${path}</h1>`));
+      case '/tall':
+        return send(res, 200, page('<div style="height:3000px;background:linear-gradient(#fff,#8ad)">tall</div>'));
+      case '/late':    // the heading appears 2.5 s after load: only waitFor can see it
+        return send(res, 200, page('<nav>late</nav><div id="slot"></div>',
+          '<script>setTimeout(()=>{document.getElementById("slot").innerHTML="<h1 id=\\"late\\">Loaded late</h1>"},2500)</script>'));
+      case '/late-final':
+        return send(res, 200, page('<nav>late</nav><div id="slot"><h1 id="late">Loaded late</h1></div>'));
+      case '/clock':   // changes on every request, like a timestamp
+        clock += 1;
+        return send(res, 200, page(`<nav>clock</nav><h1>Stable heading</h1><p id="ts" style="font-size:40px">request ${clock}</p>`));
+      // A finite animation fades a box in over 20 s; /anim-done shows the same box already faded in; /anim-static
+      // has the infinite one's resting position. Screenshots with animations disabled must match the static pages.
+      case '/anim-finite':
+        return send(res, 200, page('<nav>anim</nav><div class="box" style="position:relative;width:80px;height:80px;background:#e33;animation:show 20s linear forwards"></div>',
+          '<style>@keyframes show{from{opacity:0}to{opacity:1}}</style>'));
+      case '/anim-done':
+        return send(res, 200, page('<nav>anim</nav><div class="box" style="position:relative;width:80px;height:80px;background:#e33;opacity:1"></div>'));
+      case '/anim-infinite':
+        return send(res, 200, page('<nav>anim</nav><div class="box" style="position:relative;width:80px;height:80px;background:#e33;animation:mv 1s linear infinite alternate"></div>',
+          '<style>@keyframes mv{from{left:0}to{left:300px}}</style>'));
+      case '/anim-static':
+        return send(res, 200, page('<nav>anim</nav><div class="box" style="position:relative;width:80px;height:80px;background:#e33;left:0"></div>'));
+      case '/err404':
+        return send(res, 404, page('<nav>x</nav><h1>Not found, on purpose</h1>'));
+      case '/boom':
+        return send(res, 500, page('<h1>Server error</h1>'));
+      case '/gone':    // leaves the site
+        return redirect(res, `${otherUrl}/landing`);
+      case '/old':     // stays on the site
+        return redirect(res, '/new');
+      case '/shop':    // the end-to-end page: 'broken' mode loses its navigation
+        return send(res, 200, page(`${mode === 'broken' ? '' : '<nav>Shop navigation</nav>'}<div class="hero"><h1>Gear</h1><p>Free shipping.</p></div>`));
+      case '/__mode':
+        mode = url.searchParams.get('m') || 'normal';
+        return send(res, 200, 'ok', 'text/plain');
+      case '/sitemap.xml':
+        return send(res, 200, `<urlset><url><loc>${mainUrl}/sitemap-only</loc></url><url><loc>${mainUrl}/about</loc></url></urlset>`, 'application/xml');
+      default:
+        return send(res, 404, 'nope', 'text/plain');
+    }
+  });
+  const otherServer = http.createServer((req, res) => send(res, 200, page('<h1>The other site</h1><a href="/back">back</a>')));
+
+  const listen = s => new Promise(r => s.listen(0, '127.0.0.1', () => r(s.address().port)));
+  const mainPort = await listen(mainServer);
+  const otherPort = await listen(otherServer);
+  mainUrl = `http://127.0.0.1:${mainPort}`;
+  otherUrl = `http://127.0.0.1:${otherPort}`;
+  return {
+    main: mainUrl, other: otherUrl, visited,
+    setMode: async m => { mode = m; },
+    close: () => Promise.all([mainServer, otherServer].map(s => new Promise(r => { s.closeAllConnections?.(); s.close(r); }))),
+  };
+}

@@ -2,7 +2,7 @@
 // print the paths that are NOT listed there, so you can add the ones that matter. It never changes pages.json and
 // never takes screenshots: what vr compares stays exactly what you listed.
 //   DISCOVER_DEPTH=2   link hops from the listed pages        DISCOVER_MAX=50   pages to visit at most
-import { chromium } from 'playwright';
+import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
 import { resolveTargets } from './config.mjs';
 import { normalizeLink, shouldSkip, parseSitemap, newPaths, joinUrl } from './links.mjs';
@@ -14,7 +14,7 @@ const raw = JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url))
 const ignore = (Array.isArray(raw) ? [] : raw.discover?.ignore) ?? [];
 const listed = [...new Set(resolveTargets(raw).map(t => t.path))];
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 const ctx = await browser.newContext();
 const page = await ctx.newPage();
 

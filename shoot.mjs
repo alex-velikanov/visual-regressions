@@ -1,4 +1,4 @@
-import { chromium } from 'playwright';
+import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
 import { resolveTargets, fileName } from './config.mjs';
 import { joinUrl } from './links.mjs';
@@ -7,7 +7,7 @@ const base  = process.env.BASE_URL;
 const out   = process.env.OUT;
 const targets = resolveTargets(JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url))));
 
-const browser = await chromium.launch();
+const browser = await launchBrowser();
 fs.mkdirSync(out, { recursive: true });
 
 // One browser context per viewport: size, touch and mobile emulation are set per context.
