@@ -20,7 +20,8 @@
 //   fields: CSS selector -> "$NAME"; the value comes from the environment variable VR_<PROFILE>_<NAME> (here
 //           VR_CUSTOMER_USER), so a credential can never be written into pages.json.
 //   submit: the button to click (default: press Enter).   loggedIn: a CSS selector present on every logged-in page.
-//   judge:  true sends this profile's screenshots to the AI judge (default: no, they are compared as pixels only).
+//   judge:  false keeps this profile's screenshots away from the AI judge (default: true, they are judged like any other page).
+//           A changed page that is not judged fails the run, because nothing else can vouch for it.
 // "discover": { "ignore": ["^/admin"] } lists extra path patterns for `vr.sh --discover` to skip.
 
 export const DEFAULT_VIEWPORTS = {
@@ -72,7 +73,7 @@ export function resolveAuth(raw) {
     profiles[name] = {
       loginUrl: p.loginUrl,
       fields: Object.entries(p.fields).map(([selector, ref]) => [selector, ref.slice(1)]),
-      submit: p.submit, loggedIn: p.loggedIn, judge: p.judge === true,
+      submit: p.submit, loggedIn: p.loggedIn, judge: p.judge !== false,
     };
   }
   return profiles;
@@ -127,7 +128,7 @@ export function resolveTargets(raw) {
         waitFor: p.waitFor, mask: p.mask ?? [], expectStatus: p.expectStatus,
         maxTiles: p.maxTiles ?? cfg.maxTiles ?? DEFAULT_MAX_TILES,
         auth: p.auth,
-        private: p.auth !== undefined && !profiles[p.auth].judge,    // behind a login and not allowed to go to the judge
+        private: p.auth !== undefined && !profiles[p.auth].judge,    // behind a login whose profile says "judge": false
       });
     }
   }

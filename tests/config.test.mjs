@@ -78,14 +78,16 @@ test('rejects bad per-page options', () => {
 // ---- login profiles
 const PROFILE = { loginUrl: '/login', fields: { '#email': '$USER', '#password': '$PASSWORD' }, submit: 'button[type=submit]', loggedIn: '#account-menu' };
 const withAuth = (profile, pages = [{ path: '/orders', auth: 'customer' }]) => ({ auth: { customer: profile }, pages });
-test('a login profile and a page that uses it resolve; the page is private (not for the judge) unless the profile says judge: true', () => {
+test('a login profile and a page that uses it resolve; the page goes to the judge like any other unless the profile says judge: false', () => {
   const t = resolveTargets({ viewports: { d: { width: 10, height: 10 } }, ...withAuth(PROFILE, ['/', { path: '/orders', auth: 'customer' }]) });
-  assert.deepEqual(t.map(x => [x.path, x.auth, x.private]), [['/', undefined, false], ['/orders', 'customer', true]]);
-  const open = resolveTargets({ viewports: { d: { width: 10, height: 10 } }, ...withAuth({ ...PROFILE, judge: true }) });
-  assert.deepEqual([open[0].auth, open[0].private], ['customer', false]);
+  assert.deepEqual(t.map(x => [x.path, x.auth, x.private]), [['/', undefined, false], ['/orders', 'customer', false]]);
+  const closed = resolveTargets({ viewports: { d: { width: 10, height: 10 } }, ...withAuth({ ...PROFILE, judge: false }) });
+  assert.deepEqual([closed[0].auth, closed[0].private], ['customer', true]);
+  const explicit = resolveTargets({ viewports: { d: { width: 10, height: 10 } }, ...withAuth({ ...PROFILE, judge: true }) });
+  assert.equal(explicit[0].private, false);
   const p = resolveAuth(withAuth(PROFILE)).customer;
   assert.deepEqual(p.fields, [['#email', 'USER'], ['#password', 'PASSWORD']]);
-  assert.deepEqual([p.loginUrl, p.submit, p.loggedIn, p.judge], ['/login', 'button[type=submit]', '#account-menu', false]);
+  assert.deepEqual([p.loginUrl, p.submit, p.loggedIn, p.judge], ['/login', 'button[type=submit]', '#account-menu', true]);
 });
 test('no auth is fine: a plain list and an object without "auth" have no profiles', () => {
   assert.deepEqual(resolveAuth(['/']), {});

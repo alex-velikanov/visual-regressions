@@ -200,7 +200,9 @@ test('vr.sh: a page that errors stops the compare run and leaves the baseline al
 });
 
 // ---- logins (auth.mjs, login.mjs; shoot.mjs and vr.sh with a profile)
+const NO_JUDGE = { customer: null };
 const AUTH = { customer: { loginUrl: '/login', fields: { '#email': '$USER', '#password': '$PASSWORD' }, submit: 'button[type=submit]', loggedIn: '#account-menu' } };
+NO_JUDGE.customer = { ...AUTH.customer, judge: false };
 const authPages = (extra = {}, profile = AUTH) => ({ ...ONE, auth: profile, pages: [{ path: '/account', auth: 'customer', ...extra }] });
 const CREDS = { VR_CUSTOMER_USER: site.user.email, VR_CUSTOMER_PASSWORD: site.user.password };
 const vrIn = (d, args, env = {}) => run('bash', ['vr.sh', ...args], d, { PATH: `${path.join(d, 'bin')}:${process.env.PATH}`, CLAUDE_STUB_LOG: path.join(d, 'claude.log'), CLAUDE_STUB_OUT: path.join(d, 'claude.out'), ...env });
@@ -329,8 +331,8 @@ const privateRun = async (profile, pages) => {
   await site.setMode('broken');
   return d;
 };
-test('vr.sh: a changed page behind a login is never sent to the judge, and fails the run with a report that says why', async () => {
-  const d = await privateRun(AUTH, [{ path: '/account', auth: 'customer' }]);
+test('vr.sh: with "judge": false a changed page behind a login is never sent to the judge, and fails the run with a report that says why', async () => {
+  const d = await privateRun(NO_JUDGE, [{ path: '/account', auth: 'customer' }]);
   const r = await vrIn(d, [site.main]);
   await site.setMode('normal');
   assert.equal(r.code, 1, r.stderr + r.stdout);
@@ -342,23 +344,33 @@ test('vr.sh: a changed page behind a login is never sent to the judge, and fails
   assert.match(html, /FAIL/);
   assert.match(html, /Not sent to the judge: this page is behind a login/);
 });
-test('vr.sh: public pages still go to the judge, and a profile with "judge": true sends its pages too', async () => {
-  let d = await privateRun(AUTH, ['/shop', { path: '/account', auth: 'customer' }]);
-  fs.writeFileSync(path.join(d, 'claude.out'), JSON.stringify([{ file: 'desktop__shop__0.png', verdict: 'pass', severity: 0, seen: 'the shop page', findings: [] }]));
+test('vr.sh: a page behind a login goes to the judge like any other, and only "judge": false keeps it away', async () => {
+  // default: the judge sees the logged-in page and its verdict decides
+  let d = await privateRun(AUTH, [{ path: '/account', auth: 'customer' }]);
+  fs.writeFileSync(path.join(d, 'claude.out'), JSON.stringify([{ file: 'desktop__account__0.png', verdict: 'pass', severity: 1, seen: 'the account page', findings: [] }]));
   let r = await vrIn(d, [site.main]);
+  await site.setMode('normal');
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.match(fs.readFileSync(path.join(d, 'claude.log'), 'utf8'), /desktop__account__0\.png/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(d, 'private.json'))), []);
+  assert.ok(!JSON.parse(fs.readFileSync(path.join(d, 'report.json')))[0].judge_skipped);
+  d = await privateRun(AUTH, [{ path: '/account', auth: 'customer' }]);
+  fs.writeFileSync(path.join(d, 'claude.out'), JSON.stringify([{ file: 'desktop__account__0.png', verdict: 'fail', severity: 4, seen: 'the account page without its orders', findings: [] }]));
+  r = await vrIn(d, [site.main]);
+  await site.setMode('normal');
+  assert.equal(r.code, 1, r.stderr + r.stdout);                      // a broken logged-in page is caught by the judge, like any page
+  assert.equal(JSON.parse(fs.readFileSync(path.join(d, 'report.json')))[0].severity, 4);
+
+  // judge: false: public pages still go to the judge, the logged-in one does not
+  d = await privateRun(NO_JUDGE, ['/shop', { path: '/account', auth: 'customer' }]);
+  fs.writeFileSync(path.join(d, 'claude.out'), JSON.stringify([{ file: 'desktop__shop__0.png', verdict: 'pass', severity: 0, seen: 'the shop page', findings: [] }]));
+  r = await vrIn(d, [site.main]);
   await site.setMode('normal');
   assert.equal(r.code, 1, r.stderr + r.stdout);                      // the page behind the login changed, and nobody vouches for it
   const prompt = fs.readFileSync(path.join(d, 'claude.log'), 'utf8');
   assert.match(prompt, /desktop__shop__0\.png/);
   assert.ok(!prompt.includes('desktop__account__0.png'), 'a page behind a login was named to the judge');
 
-  d = await privateRun({ customer: { ...AUTH.customer, judge: true } }, [{ path: '/account', auth: 'customer' }]);
-  fs.writeFileSync(path.join(d, 'claude.out'), JSON.stringify([{ file: 'desktop__account__0.png', verdict: 'pass', severity: 1, seen: 'the account page', findings: [] }]));
-  r = await vrIn(d, [site.main]);
-  await site.setMode('normal');
-  assert.equal(r.code, 0, r.stderr + r.stdout);
-  assert.match(fs.readFileSync(path.join(d, 'claude.log'), 'utf8'), /desktop__account__0\.png/);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(d, 'private.json'))), []);
 });
 
 // ---- run them
