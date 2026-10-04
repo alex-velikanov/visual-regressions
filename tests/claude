@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Test stand-in for the `claude` CLI. Logs its arguments and prints a canned reply: $CLAUDE_STUB_OUT.<n> for the n-th call
+# if that file exists, else $CLAUDE_STUB_OUT. Each call also appends a line to $CLAUDE_STUB_LOG.calls.
+printf '%s\n' "$@" >> "$CLAUDE_STUB_LOG"
+n=1; [ -f "$CLAUDE_STUB_LOG.calls" ] && n=$(( $(wc -l < "$CLAUDE_STUB_LOG.calls") + 1 ))
+echo "call $n" >> "$CLAUDE_STUB_LOG.calls"
+if [ -f "$CLAUDE_STUB_OUT.$n" ]; then cat "$CLAUDE_STUB_OUT.$n"; else cat "$CLAUDE_STUB_OUT"; fi
