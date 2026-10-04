@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Turns the judge's raw replies into report.json and warnings.json. Called by vr.sh in three steps:
-  report.py merge     read raw_report.N.txt (first pass), apply the blank-page guard, write first.json and suspects.json
+  report.py merge     read raw_report.N.txt (first pass), apply the blank-page guard, write first.json and suspects.json.
+                      If a reply holds no JSON array it writes judge_errors.json instead and exits 1
   report.py suspects  print the files that deserve an independent second look, one per line
   report.py final     fold in recheck.N.txt (one per suspect, same order), write report.json and warnings.json, exit 1 at severity >= 3
 
@@ -13,6 +14,7 @@ of its pixels differing gets a warning. Warnings never change the exit code.
 import glob, json, os, re, sys
 
 DEC = json.JSONDecoder()
+MAX_REPLY = 20000        # how much of an unreadable judge reply is kept for the HTML report
 FIRST_NOTE = {'what': 'The page is blank (one flat colour) where the baseline was not.', 'where': 'entire page', 'confidence': 'high'}
 
 
@@ -68,15 +70,25 @@ def severity(record):
 
 
 def merge():
+    try:
+        os.remove('judge_errors.json')
+    except FileNotFoundError:
+        pass
     report = []
+    errors = []
     for path in numbered('raw_report.*.txt', r'\.(\d+)\.txt$'):
         text = open(path).read()
         part = parse(text)
         if part is None:
             print(f'No JSON array found in model output ({path}):', file=sys.stderr)
             print(text, file=sys.stderr)
-            sys.exit(1)
+            errors.append({'file': path, 'reply': text[:MAX_REPLY]})
+            continue
         report += part
+    if errors:
+        # Nothing usable to merge: keep the replies for the HTML report (which vr.sh still writes) and stop with exit 1.
+        json.dump(errors, open('judge_errors.json', 'w'), indent=2)
+        sys.exit(1)
     by_file = {}
     for r in report:
         if not severity_ok(r):

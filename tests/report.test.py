@@ -154,6 +154,27 @@ class SeverityTests(unittest.TestCase):
                 else:
                     self.assertEqual(entries[0].get('judge_incomplete'), expected, entries)
 
+    def test_a_reply_with_no_json_array_is_kept_for_the_report_and_stops_the_run(self):
+        self.write('raw_report.1.txt', [{'file': 'a', 'severity': 0, 'seen': 'page'}])
+        (self.root / 'raw_report.2.txt').write_text('I could not open the images. <script>alert(1)</script>')
+        (self.root / 'raw_report.3.txt').write_text('x' * 30000)
+        self.write('changed.json', ['a', 'b'])
+        self.run_report('merge', expected=1)
+        errors = self.read('judge_errors.json')
+        self.assertEqual([e['file'] for e in errors], ['raw_report.2.txt', 'raw_report.3.txt'])
+        self.assertIn('could not open the images', errors[0]['reply'])
+        self.assertEqual(len(errors[1]['reply']), 20000)            # kept, but bounded
+        self.assertFalse((self.root / 'first.json').exists())       # nothing is judged, so nothing is merged
+
+    def test_readable_replies_leave_no_judge_errors(self):
+        (self.root / 'raw_report.1.txt').write_text('No usable reply')
+        self.run_report('merge', expected=1)
+        self.assertTrue((self.root / 'judge_errors.json').exists())
+        self.write('raw_report.1.txt', [{'file': 'a', 'severity': 0, 'seen': 'page'}])
+        self.write('changed.json', ['a'])
+        self.run_report('merge')
+        self.assertFalse((self.root / 'judge_errors.json').exists())
+
     def test_readable_severities_are_not_suspects(self):
         for value in [0, 2, 3, 5, '4', 2.9, 0.0]:
             with self.subTest(value=value):

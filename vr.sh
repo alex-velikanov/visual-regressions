@@ -32,7 +32,7 @@ if [ -z "$(ls -A baseline 2>/dev/null)" ]; then
   exit 2
 fi
 
-rm -rf current changed.json blank.json diffs.json report.json warnings.json raw_report.txt raw_report.*.txt recheck.*.txt first.json suspects.json judge.tmp diff report
+rm -rf current changed.json blank.json diffs.json report.json warnings.json raw_report.txt raw_report.*.txt recheck.*.txt first.json suspects.json judge_errors.json judge.tmp diff report
 OUT=current BASE_URL=$URL node shoot.mjs
 node filter.mjs
 
@@ -68,7 +68,13 @@ rm -rf judge.tmp
 
 # Pass 2: a file the judge skipped, did not describe, or passed while a good share of its pixels changed is judged
 # again on its own, independently. The second opinion can only raise a severity. See report.py for the rules and caps.
-python3 report.py merge
+# If a reply has no readable verdict there is nothing to re-check: write the HTML report (it shows the replies) and stop.
+rc=0
+python3 report.py merge || rc=$?
+if [ "$rc" != 0 ]; then
+  VR_REPORT_URL=$URL python3 html_report.py || echo "(could not write the HTML report)" >&2
+  exit $rc
+fi
 n=0
 for file in $(python3 report.py suspects); do
   n=$((n+1))
@@ -81,7 +87,6 @@ done
 
 # Final report: the blank-page guard and warnings (see report.py) are applied here. Exit 1 at severity 3 or above.
 # Then the HTML report (report/index.html), which is written whatever the verdict.
-rc=0
 python3 report.py final || rc=$?
 VR_REPORT_URL=$URL python3 html_report.py || echo "(could not write the HTML report)" >&2
 exit $rc

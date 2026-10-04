@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Writes report/index.html: every changed screenshot with baseline, current and diff side by side, the judge's
 verdict, and the warnings, worst first. Called by vr.sh after report.py. Reads (in the current directory)
-changed.json, report.json, warnings.json, diffs.json, baseline/, current/, diff/; copies the images it shows into
+changed.json, report.json, warnings.json, judge_errors.json, diffs.json, baseline/, current/, diff/; copies the images it shows into
 report/img/, so the report folder is self-contained (zip it, or upload it as a CI artifact).
 
 Everything the judge wrote, and every file name, is escaped: the judge reads untrusted pages, so its text is untrusted.
@@ -66,7 +66,7 @@ def copy_images(filename):
         return found
     for kind in ('baseline', 'current', 'diff'):
         src = os.path.join(kind, filename)
-        if os.path.isfile(src):
+        if os.path.isfile(src) and not os.path.islink(src):     # a symlink could point anywhere on disk
             dest_dir = os.path.join(OUT, 'img', kind)
             os.makedirs(dest_dir, exist_ok=True)
             shutil.copy2(src, os.path.join(dest_dir, filename))
@@ -164,8 +164,21 @@ main{max-width:1500px;margin:0 auto;padding:16px}h1{margin:0 0 4px;font-size:22p
 figure{margin:0;min-width:0}figcaption{font-size:12px;color:var(--muted);margin-bottom:4px}
 img{display:block;max-width:100%;height:auto;border:1px solid var(--line);background:#fff}figure.missing p{color:var(--muted);margin:0}
 details summary{cursor:pointer;margin:12px 0;font-weight:600}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--card);border:1px solid var(--line);border-radius:6px;padding:8px}
 @media (max-width:800px){.shots{grid-template-columns:1fr}}
 """
+
+
+def replies_html(replies):
+    """The judge replies that held no readable verdict, as plain text (they are untrusted, and cut at MAX_TEXT)."""
+    if not replies:
+        return ''
+    items = []
+    for r in replies:
+        text = r.get('reply') if isinstance(r.get('reply'), str) else ''
+        cut = ' ... (cut)' if len(text) > MAX_TEXT else ''
+        items.append(f'<h3>{e(r.get("file", ""))}</h3><pre>{e(text[:MAX_TEXT])}{cut}</pre>')
+    return f'<h2>Replies that could not be read ({len(replies)})</h2>' + ''.join(items)
 
 
 def main():
@@ -179,6 +192,8 @@ def main():
     entries = {r['file']: r for r in report
                if isinstance(r, dict) and isinstance(r.get('file'), str) and r['file'] in compared}
     ignored = len(report) - len(entries)
+    errors = load('judge_errors.json', [])
+    replies = [r for r in (errors if isinstance(errors, list) else []) if isinstance(r, dict)]
     warn_by_file = {}
     for w in warnings if isinstance(warnings, list) else []:
         if isinstance(w, dict):
@@ -193,7 +208,10 @@ def main():
     other = [f for f in files if f not in failed and f not in look]
 
     unjudged = [f for f in files if not usable(entries.get(f))]
-    if not has_report:
+    if not has_report and replies:
+        banner = (f'<div class="banner fail"><strong>NO VERDICT</strong> {len(replies)} of the judge\'s replies could not be read, '
+                  f'so none of the {len(files)} changed screenshots was judged. The replies are shown below and in raw_report.N.txt.</div>')
+    elif not has_report:
         banner = '<div class="banner"><strong>No report</strong> The run stopped before the judge\'s verdicts were merged. See raw_report.txt.</div>'
     elif failed:
         worst = max(sev_of(entries[f]) for f in failed)
@@ -222,6 +240,7 @@ def main():
     body = (f'<h1>Visual regression report</h1><p class="meta">{e(when)}' + (f' · {e(url)}' if url else '') + '</p>'
             + banner
             + (f'<p class="meta">Ignored {ignored} judge entries for files that were not compared.</p>' if ignored and has_report else '')
+            + replies_html(replies)
             + section('Failed', failed)
             + section('Needs a look', look)
             + section('Other changes', other, wrap_details=True))

@@ -181,6 +181,46 @@ class ReportTests(unittest.TestCase):
                 self.assertNotIn('PASS', page)
 
 
+    def test_unreadable_judge_replies_are_shown_as_text_and_the_run_is_not_a_pass(self):
+        self.put('changed.json', ['desktop__home__0.png', 'mobile__home__0.png'])
+        self.images('desktop__home__0.png')
+        self.put('judge_errors.json', [{'file': 'raw_report.1.txt', 'reply': 'I could not open <script>alert(1)</script> the images'},
+                                       {'file': 'raw_report.2.txt', 'reply': 'y' * 5000}])
+        page = self.run_report()
+        self.assertIn('NO VERDICT', page)
+        self.assertIn('2 of the judge', page)
+        self.assertIn('Replies that could not be read (2)', page)
+        self.assertIn('I could not open &lt;script&gt;alert(1)&lt;/script&gt; the images', page)
+        self.assertNotIn('<script>', page)
+        self.assertLess(page.count('y'), 2200)                       # long replies are cut
+        self.assertEqual(page.count('class="card'), 2)               # both changed files still shown, with their images
+        self.assertIn('img/baseline/desktop__home__0.png', page)
+        self.assertNotIn('PASS', page)
+
+    def test_malformed_judge_errors_are_ignored(self):
+        self.put('changed.json', ['desktop__home__0.png'])
+        for value in [{'a': 1}, 'text', [1, 'x', None], [{'file': 'f', 'reply': 7}]]:
+            with self.subTest(value=value):
+                self.put('judge_errors.json', value)
+                page = self.run_report()
+                self.assertNotIn('PASS', page)
+
+    def test_a_symlinked_screenshot_is_never_copied(self):
+        outer = self.root / 'outer'
+        work = outer / 'vr'
+        work.mkdir(parents=True)
+        (outer / 'secret.png').write_text('TOP SECRET')
+        for kind in ('baseline', 'current'):
+            (work / kind).mkdir()
+            (work / kind / 'desktop__home__0.png').symlink_to(outer / 'secret.png')
+        (work / 'changed.json').write_text(json.dumps(['desktop__home__0.png']))
+        (work / 'report.json').write_text('[]')
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')
+        r = subprocess.run([sys.executable, str(SCRIPT)], cwd=work, capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([p.name for p in (work / 'report').rglob('*') if p.is_file()], ['index.html'])
+        self.assertNotIn('img/', (work / 'report' / 'index.html').read_text())
+
     def test_file_names_from_the_judge_cannot_reach_files_outside_the_screenshot_folders(self):
         outer = self.root / 'outer'
         work = outer / 'vr'
