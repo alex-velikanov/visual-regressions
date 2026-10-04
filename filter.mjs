@@ -21,6 +21,10 @@ function isBlank(png) {
   return top / px.length >= BLANK_SHARE;
 }
 
+// diff/<file>: where the two screenshots differ, for each same-size changed pair (the HTML report shows it).
+fs.rmSync('diff', { recursive: true, force: true });
+fs.mkdirSync('diff');
+
 const base = fs.readdirSync('baseline');
 const cur = fs.readdirSync('current');
 const all = [...new Set([...base, ...cur])].sort();
@@ -33,11 +37,15 @@ for (const f of all) {
   const a = PNG.sync.read(fs.readFileSync(`baseline/${f}`));
   const b = PNG.sync.read(fs.readFileSync(`current/${f}`));
   if (a.width !== b.width || a.height !== b.height) { changed.push(f); if (isBlank(b) && !isBlank(a)) blank.push(f); continue; }
-  const d = pixelmatch(a.data, b.data, null, a.width, a.height, { threshold: 0.1 });
+  const diffImage = new PNG({ width: a.width, height: a.height });
+  const d = pixelmatch(a.data, b.data, diffImage.data, a.width, a.height, { threshold: 0.1 });
   diffPct[f] = Math.round((d / (a.width * a.height)) * 1000) / 10;
   const wentBlank = isBlank(b) && !isBlank(a);
   if (wentBlank) blank.push(f);
-  if (wentBlank || d > MIN_DIFF_PX) changed.push(f);
+  if (wentBlank || d > MIN_DIFF_PX) {
+    changed.push(f);
+    fs.writeFileSync(`diff/${f}`, PNG.sync.write(diffImage));
+  }
 }
 
 fs.writeFileSync('changed.json', JSON.stringify(changed, null, 2));

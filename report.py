@@ -82,8 +82,10 @@ def merge():
         if not severity_ok(r):
             r['severity_raw'] = r.get('severity')   # kept for the report; the file is re-judged below
             r['severity'] = 0
+            r['judge_incomplete'] = True            # no usable verdict yet: a usable re-check (or a blank page) clears this
         else:
             r['severity'] = severity(r)
+            r['judge_incomplete'] = False
         by_file.setdefault(r.get('file'), r)
     report = list(by_file.values())
 
@@ -91,12 +93,13 @@ def merge():
     for f in blank:
         r = by_file.get(f)
         if r is None:
-            r = {'file': f, 'verdict': 'fail', 'severity': 5, 'findings': [], 'judge_severity': None}
+            r = {'file': f, 'verdict': 'fail', 'severity': 5, 'findings': [], 'judge_severity': None, 'judge_incomplete': False}
             report.append(r)
             by_file[f] = r
         elif r.get('severity', 0) < 5:
             r['judge_severity'] = r.get('severity', 0)
             r['verdict'], r['severity'] = 'fail', 5
+            r['judge_incomplete'] = False             # a blank page fails whatever the judge said
         else:
             continue
         r['findings'] = (r['findings'] if isinstance(r.get('findings'), list) else []) + [FIRST_NOTE]
@@ -148,21 +151,25 @@ def final():
             warnings.append({'file': f, 'warning': f"The independent re-check returned nothing usable ({s['reason']})."})
             continue
         first = by_file.get(f)
-        if severity_ok(second):
+        second_ok = severity_ok(second)
+        if second_ok:
             second['severity'] = sev2 = severity(second)
         else:
             warnings.append({'file': f, 'warning': f"The re-check gave an unreadable severity ({json.dumps(second.get('severity'))}); it was ignored."})
             second['severity'] = sev2 = 0
         if first is None:
-            first = {'file': f, 'verdict': second.get('verdict', 'pass'), 'severity': sev2, 'findings': []}
+            first = {'file': f, 'verdict': second.get('verdict', 'pass'), 'severity': sev2, 'findings': [],
+                     'judge_incomplete': not second_ok}
             report.append(first)
             by_file[f] = first
             first['first_severity'] = None
         else:
             first['first_severity'] = None if 'severity_raw' in first else first.get('severity', 0)
         first['rechecked'] = s['reason']
-        if sev2 > (first.get('severity', 0) or 0):
-            first['severity'], first['verdict'] = sev2, second.get('verdict', 'fail')
+        if second_ok:
+            if first.get('judge_incomplete') or sev2 > (first.get('severity', 0) or 0):
+                first['severity'], first['verdict'] = sev2, second.get('verdict', 'fail')
+            first['judge_incomplete'] = False         # a usable second opinion completes the verdict
         if isinstance(second.get('findings'), list):
             first['findings'] = (first['findings'] if isinstance(first.get('findings'), list) else []) + second['findings']
         if second.get('seen') and not first.get('seen'):
