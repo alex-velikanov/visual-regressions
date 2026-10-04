@@ -12,7 +12,15 @@
 //   "mask":    ["<css>", ...]     paint over these elements (timestamps, ads, random content) in every screenshot
 //   "expectStatus": 404           the HTTP status the page should return (default: any status below 400)
 //   "maxTiles": 8                 allow a taller page (default 6 screenshots per page and viewport; more is an error)
+//   "auth": "customer"            shoot this page logged in, as that profile (see "auth" below)
 // Top level: "maxTiles" sets that default for every page.
+// Top level "auth" defines login profiles for pages behind a login:
+//   "auth": { "customer": { "loginUrl": "/login", "fields": { "#email": "$USER", "#password": "$PASSWORD" },
+//                           "submit": "button[type=submit]", "loggedIn": "#account-menu" } }
+//   fields: CSS selector -> "$NAME"; the value comes from the environment variable VR_<PROFILE>_<NAME> (here
+//           VR_CUSTOMER_USER), so a credential can never be written into pages.json.
+//   submit: the button to click (default: press Enter).   loggedIn: a CSS selector present on every logged-in page.
+//   judge:  true sends this profile's screenshots to the AI judge (default: no, they are compared as pixels only).
 // "discover": { "ignore": ["^/admin"] } lists extra path patterns for `vr.sh --discover` to skip.
 
 export const DEFAULT_VIEWPORTS = {
@@ -30,6 +38,45 @@ export function fileName(target, tile) {
 }
 
 export const DEFAULT_MAX_TILES = 6;
+
+// The environment variable that holds one of a profile's secrets: envName('customer', 'USER') is VR_CUSTOMER_USER.
+export function envName(profile, suffix) {
+  return `VR_${profile.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_${suffix}`;
+}
+
+const isSelector = v => typeof v === 'string' && v.trim() !== '';
+
+// The login profiles of a pages.json, validated: { name: { loginUrl, fields: [[selector, VARIABLE]], submit, loggedIn, judge } }.
+export function resolveAuth(raw) {
+  const auth = Array.isArray(raw) ? undefined : raw?.auth;
+  if (auth === undefined) return {};
+  if (auth === null || typeof auth !== 'object' || Array.isArray(auth)) throw new Error('"auth" must be an object of login profiles');
+  const profiles = {};
+  for (const [name, p] of Object.entries(auth)) {
+    const at = `auth profile "${name}"`;
+    if (!/^[a-z0-9-]+$/i.test(name)) throw new Error(`auth profile name "${name}" must be letters, digits or "-"`);
+    if (p === null || typeof p !== 'object' || Array.isArray(p)) throw new Error(`${at} must be an object`);
+    if (typeof p.loginUrl !== 'string' || !p.loginUrl.startsWith('/')) throw new Error(`${at}: loginUrl must be a path starting with "/"`);
+    if (p.fields === null || typeof p.fields !== 'object' || Array.isArray(p.fields) || Object.keys(p.fields).length === 0) {
+      throw new Error(`${at}: fields must be an object of CSS selector -> "$NAME"`);
+    }
+    for (const [selector, ref] of Object.entries(p.fields)) {
+      if (!isSelector(selector)) throw new Error(`${at}: a field selector must not be empty`);
+      if (typeof ref !== 'string' || !/^\$[A-Z][A-Z0-9_]*$/.test(ref)) {
+        throw new Error(`${at}: the value for "${selector}" must be a $NAME reference to an environment variable (it is read from ${envName(name, 'NAME')}); credentials never go in pages.json`);
+      }
+    }
+    if (p.submit !== undefined && !isSelector(p.submit)) throw new Error(`${at}: submit must be a CSS selector string`);
+    if (!isSelector(p.loggedIn)) throw new Error(`${at}: loggedIn must be a CSS selector that is present on every logged-in page (it is how an expired session is noticed)`);
+    if (p.judge !== undefined && typeof p.judge !== 'boolean') throw new Error(`${at}: judge must be true or false`);
+    profiles[name] = {
+      loginUrl: p.loginUrl,
+      fields: Object.entries(p.fields).map(([selector, ref]) => [selector, ref.slice(1)]),
+      submit: p.submit, loggedIn: p.loggedIn, judge: p.judge === true,
+    };
+  }
+  return profiles;
+}
 
 function checkOptions(p) {
   if (p.waitFor !== undefined && (typeof p.waitFor !== 'string' || !p.waitFor)) throw new Error(`page "${p.path}": waitFor must be a CSS selector string`);
@@ -55,6 +102,7 @@ export function resolveTargets(raw) {
     }
   }
 
+  const profiles = resolveAuth(cfg);
   const targets = [];
   const seen = new Set();
   for (const page of cfg.pages) {
@@ -63,6 +111,9 @@ export function resolveTargets(raw) {
       throw new Error(`page path must be a string starting with "/": ${JSON.stringify(page)}`);
     }
     checkOptions(p);
+    if (p.auth !== undefined && (typeof p.auth !== 'string' || !Object.hasOwn(profiles, p.auth))) {
+      throw new Error(`page "${p.path}": auth must name a profile defined under "auth" (known: ${Object.keys(profiles).join(', ') || 'none'})`);
+    }
     if (p.viewports !== undefined && (!Array.isArray(p.viewports) || p.viewports.length === 0)) {
       throw new Error(`page "${p.path}": viewports must be a non-empty array`);
     }
@@ -75,6 +126,8 @@ export function resolveTargets(raw) {
         path: p.path, viewport: name, ...viewports[name],
         waitFor: p.waitFor, mask: p.mask ?? [], expectStatus: p.expectStatus,
         maxTiles: p.maxTiles ?? cfg.maxTiles ?? DEFAULT_MAX_TILES,
+        auth: p.auth,
+        private: p.auth !== undefined && !profiles[p.auth].judge,    // behind a login and not allowed to go to the judge
       });
     }
   }

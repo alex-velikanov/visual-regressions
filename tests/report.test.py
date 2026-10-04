@@ -175,6 +175,53 @@ class SeverityTests(unittest.TestCase):
         self.run_report('merge')
         self.assertFalse((self.root / 'judge_errors.json').exists())
 
+    def test_a_changed_private_page_fails_the_run_without_the_judge_and_is_never_re_checked(self):
+        self.write('raw_report.1.txt', [{'file': 'public', 'severity': 0, 'seen': 'page'}])
+        self.write('changed.json', ['public', 'private'])
+        self.write('private.json', ['private'])
+        self.write('diffs.json', {'public': 1, 'private': 90})
+        self.run_report('merge')
+        entries = {r['file']: r for r in self.read('first.json')}
+        self.assertEqual((entries['private']['severity'], entries['private']['verdict']), (3, 'fail'))
+        self.assertTrue(entries['private']['judge_skipped'])
+        self.assertFalse(entries['private']['judge_incomplete'])
+        self.assertIn('not sent to the judge', entries['private']['findings'][0]['what'])
+        self.assertEqual(self.read('suspects.json'), [])            # not even with 90% of its pixels changed
+        self.run_report('final', expected=1)                        # severity 3 gates
+        self.assertEqual([w for w in self.read('warnings.json')], [])
+
+    def test_private_pages_alone_need_no_judge_reply_at_all(self):
+        self.write('changed.json', ['private'])
+        self.write('private.json', ['private'])
+        self.run_report('merge')                                    # no raw_report.N.txt, as vr.sh leaves it
+        self.run_report('final', expected=1)
+        self.assertEqual([r['file'] for r in self.read('report.json')], ['private'])
+
+    def test_whatever_the_judge_says_about_a_private_page_is_ignored(self):
+        self.write('raw_report.1.txt', [{'file': 'private', 'severity': 0, 'verdict': 'pass', 'seen': 'fine'}])
+        self.write('changed.json', ['private'])
+        self.write('private.json', ['private'])
+        self.run_report('merge')
+        entry = self.read('first.json')[0]
+        self.assertEqual((entry['severity'], entry['verdict'], entry['judge_skipped']), (3, 'fail', True))
+
+    def test_a_private_page_that_went_blank_is_still_forced_to_5(self):
+        self.write('changed.json', ['private'])
+        self.write('private.json', ['private'])
+        self.write('blank.json', ['private'])
+        self.run_report('merge')
+        entry = self.read('first.json')[0]
+        self.assertEqual(entry['severity'], 5)
+        self.assertTrue(entry['judge_skipped'])
+
+    def test_no_private_json_changes_nothing(self):
+        self.write('raw_report.1.txt', [{'file': 'a', 'severity': 0, 'seen': 'page'}])
+        self.write('changed.json', ['a'])
+        self.run_report('merge')
+        self.assertNotIn('judge_skipped', self.read('first.json')[0])
+        self.write('private.json', {'not': 'a list'})                # malformed: ignored, not a crash
+        self.run_report('merge')
+
     def test_readable_severities_are_not_suspects(self):
         for value in [0, 2, 3, 5, '4', 2.9, 0.0]:
             with self.subTest(value=value):

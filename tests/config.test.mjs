@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 
-const { resolveTargets, DEFAULT_VIEWPORTS, DEFAULT_MAX_TILES, fileName, slug } = await import(pathToFileURL(`${process.argv[2]}/config.mjs`));
+const { resolveTargets, resolveAuth, envName, DEFAULT_VIEWPORTS, DEFAULT_MAX_TILES, fileName, slug } = await import(pathToFileURL(`${process.argv[2]}/config.mjs`));
 const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 
@@ -73,6 +73,58 @@ test('rejects bad per-page options', () => {
   assert.throws(bad({ expectStatus: 99 }), /expectStatus/);
   assert.throws(bad({ maxTiles: 0 }), /maxTiles/);
   assert.throws(() => resolveTargets({ maxTiles: -1, pages: ['/'] }), /maxTiles/);
+});
+
+// ---- login profiles
+const PROFILE = { loginUrl: '/login', fields: { '#email': '$USER', '#password': '$PASSWORD' }, submit: 'button[type=submit]', loggedIn: '#account-menu' };
+const withAuth = (profile, pages = [{ path: '/orders', auth: 'customer' }]) => ({ auth: { customer: profile }, pages });
+test('a login profile and a page that uses it resolve; the page is private (not for the judge) unless the profile says judge: true', () => {
+  const t = resolveTargets({ viewports: { d: { width: 10, height: 10 } }, ...withAuth(PROFILE, ['/', { path: '/orders', auth: 'customer' }]) });
+  assert.deepEqual(t.map(x => [x.path, x.auth, x.private]), [['/', undefined, false], ['/orders', 'customer', true]]);
+  const open = resolveTargets({ viewports: { d: { width: 10, height: 10 } }, ...withAuth({ ...PROFILE, judge: true }) });
+  assert.deepEqual([open[0].auth, open[0].private], ['customer', false]);
+  const p = resolveAuth(withAuth(PROFILE)).customer;
+  assert.deepEqual(p.fields, [['#email', 'USER'], ['#password', 'PASSWORD']]);
+  assert.deepEqual([p.loginUrl, p.submit, p.loggedIn, p.judge], ['/login', 'button[type=submit]', '#account-menu', false]);
+});
+test('no auth is fine: a plain list and an object without "auth" have no profiles', () => {
+  assert.deepEqual(resolveAuth(['/']), {});
+  assert.deepEqual(resolveAuth({ pages: ['/'] }), {});
+});
+test('environment variable names: VR_<PROFILE>_<NAME>, with any other character in the profile name turned into _', () => {
+  assert.equal(envName('customer', 'USER'), 'VR_CUSTOMER_USER');
+  assert.equal(envName('my-shop', 'STATE'), 'VR_MY_SHOP_STATE');
+});
+test('credentials can never be written into pages.json: a field value must be a $NAME reference', () => {
+  for (const value of ['hunter2', '$lower', '$', '', 5, null, '$A B', 'x$USER']) {
+    assert.throws(() => resolveAuth(withAuth({ ...PROFILE, fields: { '#password': value } })), /must be a \$NAME reference to an environment variable/, String(value));
+  }
+  const err = (() => { try { resolveAuth(withAuth({ ...PROFILE, fields: { '#password': 'hunter2-secret' } })); } catch (e) { return e.message; } })();
+  assert.ok(!err.includes('hunter2-secret'), 'the rejected value was echoed in the error');
+  assert.match(err, /VR_CUSTOMER_NAME/);
+});
+test('profile validation: name, loginUrl, fields, loggedIn, submit, judge', () => {
+  const bad = (patch, re) => assert.throws(() => resolveAuth(withAuth({ ...PROFILE, ...patch })), re);
+  bad({ loginUrl: 'login' }, /loginUrl must be a path starting with "\/"/);
+  bad({ loginUrl: undefined }, /loginUrl/);
+  bad({ fields: {} }, /fields must be an object/);
+  bad({ fields: ['#a'] }, /fields must be an object/);
+  bad({ fields: { '': '$USER' } }, /selector must not be empty/);
+  bad({ loggedIn: undefined }, /loggedIn must be a CSS selector/);
+  bad({ loggedIn: '  ' }, /loggedIn must be a CSS selector/);
+  bad({ submit: '' }, /submit must be a CSS selector string/);
+  bad({ judge: 'yes' }, /judge must be true or false/);
+  assert.throws(() => resolveAuth({ auth: { 'bad name': PROFILE }, pages: ['/'] }), /profile name "bad name"/);
+  assert.throws(() => resolveAuth({ auth: [PROFILE], pages: ['/'] }), /"auth" must be an object/);
+  assert.throws(() => resolveAuth({ auth: { customer: null }, pages: ['/'] }), /must be an object/);
+});
+test('a page can only use a profile that exists', () => {
+  assert.throws(() => resolveTargets(withAuth(PROFILE, [{ path: '/orders', auth: 'nobody' }])), /page "\/orders": auth must name a profile defined under "auth" \(known: customer\)/);
+  assert.throws(() => resolveTargets({ pages: [{ path: '/orders', auth: 'customer' }] }), /known: none/);
+  assert.throws(() => resolveTargets(withAuth(PROFILE, [{ path: '/orders', auth: 5 }])), /auth must name a profile/);
+  for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {        // names every object has: not profiles
+    assert.throws(() => resolveTargets(withAuth(PROFILE, [{ path: '/orders', auth: name }])), /auth must name a profile/, name);
+  }
 });
 
 let failed = 0;

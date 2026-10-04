@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Turns the judge's raw replies into report.json and warnings.json. Called by vr.sh in three steps:
-  report.py merge     read raw_report.N.txt (first pass), apply the blank-page guard, write first.json and suspects.json.
+  report.py merge     read raw_report.N.txt (first pass), add a failing entry for each changed page the judge may not see
+                      (private.json), apply the blank-page guard, write first.json and suspects.json.
                       If a reply holds no JSON array it writes judge_errors.json instead and exits 1
   report.py suspects  print the files that deserve an independent second look, one per line
   report.py final     fold in recheck.N.txt (one per suspect, same order), write report.json and warnings.json, exit 1 at severity >= 3
@@ -15,6 +16,8 @@ import glob, json, os, re, sys
 
 DEC = json.JSONDecoder()
 MAX_REPLY = 20000        # how much of an unreadable judge reply is kept for the HTML report
+PRIVATE_NOTE = {'what': 'This page is behind a login and is not sent to the judge, so nothing has checked what changed. Compare the images yourself, then re-record if the change is intended.',
+                'where': 'entire page', 'confidence': 'high'}
 FIRST_NOTE = {'what': 'The page is blank (one flat colour) where the baseline was not.', 'where': 'entire page', 'confidence': 'high'}
 
 
@@ -101,6 +104,14 @@ def merge():
         by_file.setdefault(r.get('file'), r)
     report = list(by_file.values())
 
+    # A changed page the judge may not see (private.json) fails the run: nothing else can vouch for it.
+    private = [f for f in load('private.json', []) if isinstance(f, str)]
+    report = [r for r in report if r.get('file') not in private]
+    for f in private:
+        r = {'file': f, 'verdict': 'fail', 'severity': 3, 'findings': [PRIVATE_NOTE], 'judge_skipped': True, 'judge_incomplete': False}
+        report.append(r)
+        by_file[f] = r
+
     blank = load('blank.json', [])
     for f in blank:
         r = by_file.get(f)
@@ -120,7 +131,7 @@ def merge():
     recheck_pct = num('VR_RECHECK_DIFF_PCT', 5)
     suspects = []
     for f in load('changed.json', []):
-        if f in blank:
+        if f in blank or f in private:
             continue
         r = by_file.get(f)
         sev = (r or {}).get('severity', 0) or 0

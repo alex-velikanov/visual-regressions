@@ -1,21 +1,32 @@
 import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
-import { resolveTargets, fileName } from './config.mjs';
+import { resolveTargets, resolveAuth, fileName } from './config.mjs';
 import { joinUrl } from './links.mjs';
+import { loadSession, assertLoggedIn } from './auth.mjs';
 
 const base  = process.env.BASE_URL;
 const out   = process.env.OUT;
-const targets = resolveTargets(JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url))));
+const raw = JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url)));
+const targets = resolveTargets(raw);
+const profiles = resolveAuth(raw);
+
+// Every login profile in use needs a saved session before anything is shot.
+const sessions = {};
+for (const name of new Set(targets.map(t => t.auth).filter(Boolean))) {
+  sessions[name] = loadSession(name);
+  if (!sessions[name]) throw new Error(`No session for the login profile "${name}". Run: vr.sh --login ${name} <base-url>`);
+}
 
 const browser = await launchBrowser();
 fs.mkdirSync(out, { recursive: true });
 
-// One browser context per viewport: size, touch and mobile emulation are set per context.
-for (const name of new Set(targets.map(t => t.viewport))) {
-  const group = targets.filter(t => t.viewport === name);
-  const { width, height, mobile } = group[0];
+// One browser context per viewport and login: size, touch, mobile emulation and the session are set per context.
+for (const key of new Set(targets.map(t => `${t.viewport}\n${t.auth ?? ''}`))) {
+  const group = targets.filter(t => `${t.viewport}\n${t.auth ?? ''}` === key);
+  const { width, height, mobile, auth } = group[0];
   const ctx = await browser.newContext({
     viewport: { width, height },
+    ...(auth ? { storageState: sessions[auth] } : {}),
     reducedMotion: 'reduce',
     ...(mobile ? { isMobile: true, hasTouch: true } : {}),
   });
@@ -28,6 +39,7 @@ for (const name of new Set(targets.map(t => t.viewport))) {
     if (t.expectStatus ? status !== t.expectStatus : status === 0 || status >= 400) {
       throw new Error(`${where} returned HTTP ${status || '(no response)'}${t.expectStatus ? `, expected ${t.expectStatus}` : ''}`);
     }
+    if (t.auth) await assertLoggedIn(page, t.auth, profiles[t.auth], where);
     if (t.waitFor) await page.waitForSelector(t.waitFor, { timeout: 10000 });
     await page.evaluate(() => document.fonts.ready);
 

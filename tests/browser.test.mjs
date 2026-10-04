@@ -18,7 +18,7 @@ const site = await startSite();
 // ---- helpers
 function workdir(pages) {
   const d = fs.mkdtempSync(path.join(ROOT, 'w-'));
-  for (const f of ['vr.sh', 'filter.mjs', 'config.mjs', 'links.mjs', 'browser.mjs', 'shoot.mjs', 'discover.mjs', 'report.py', 'rubric.md']) {
+  for (const f of ['vr.sh', 'filter.mjs', 'config.mjs', 'links.mjs', 'browser.mjs', 'shoot.mjs', 'discover.mjs', 'auth.mjs', 'login.mjs', 'report.py', 'html_report.py', 'rubric.md']) {
     if (fs.existsSync(path.join(VR, f))) fs.copyFileSync(path.join(VR, f), path.join(d, f));
   }
   fs.mkdirSync(path.join(d, 'bin'));
@@ -197,6 +197,168 @@ test('vr.sh: a page that errors stops the compare run and leaves the baseline al
   assert.notEqual(rec.code, 0);
   assert.deepEqual(files(d, 'baseline'), ['desktop__shop__0.png']);
   assert.ok(!fs.existsSync(path.join(d, 'baseline.new')));
+});
+
+// ---- logins (auth.mjs, login.mjs; shoot.mjs and vr.sh with a profile)
+const AUTH = { customer: { loginUrl: '/login', fields: { '#email': '$USER', '#password': '$PASSWORD' }, submit: 'button[type=submit]', loggedIn: '#account-menu' } };
+const authPages = (extra = {}, profile = AUTH) => ({ ...ONE, auth: profile, pages: [{ path: '/account', auth: 'customer', ...extra }] });
+const CREDS = { VR_CUSTOMER_USER: site.user.email, VR_CUSTOMER_PASSWORD: site.user.password };
+const vrIn = (d, args, env = {}) => run('bash', ['vr.sh', ...args], d, { PATH: `${path.join(d, 'bin')}:${process.env.PATH}`, CLAUDE_STUB_LOG: path.join(d, 'claude.log'), CLAUDE_STUB_OUT: path.join(d, 'claude.out'), ...env });
+const session = d => path.join(d, '.auth', 'customer.json');
+const loggedInWorkdir = async (pages = authPages()) => {
+  const d = workdir(pages);
+  const r = await vrIn(d, ['--login', 'customer', site.main], CREDS);
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  return d;
+};
+
+test('login: a scripted login saves a session only its owner can read, and prints no credential or cookie', async () => {
+  const d = workdir(authPages());
+  const r = await vrIn(d, ['--login', 'customer', site.main], CREDS);
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /Saved the session for "customer"/);
+  assert.equal(fs.statSync(session(d)).mode & 0o777, 0o600);
+  assert.equal(fs.statSync(path.dirname(session(d))).mode & 0o777, 0o700);
+  const saved = JSON.parse(fs.readFileSync(session(d)));
+  assert.ok(saved.cookies.some(c => c.name === 'sid'), 'the session has no cookie');
+  const sid = saved.cookies.find(c => c.name === 'sid').value;
+  for (const secret of [site.user.password, site.user.email, sid]) assert.ok(!(r.stdout + r.stderr).includes(secret), 'a secret was printed');
+});
+test('login: a page behind a login is shot logged in, with the saved session', async () => {
+  const d = await loggedInWorkdir();
+  const before = site.authedHits();
+  const r = await shoot(d);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(files(d), ['desktop__account__0.png']);
+  assert.equal(site.authedHits() - before, 1, 'the page was not served to a logged-in visitor');
+});
+test('login: with no saved session the run says how to log in, and shoots nothing', async () => {
+  const d = workdir(authPages());
+  const r = await shoot(d);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /No session for the login profile "customer"\. Run: vr\.sh --login customer/);
+  assert.deepEqual(files(d), []);
+});
+test('login: an expired session is an error, not a screenshot of the login page', async () => {
+  const d = await loggedInWorkdir();
+  await site.expireSessions();
+  const r = await shoot(d);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /\/account \[desktop\]: not logged in as "customer" \(it was redirected to the login page\)/);
+  assert.match(r.stderr, /vr\.sh --login customer/);
+  assert.deepEqual(files(d), []);
+});
+test('login: a page without the loggedIn marker is an error too', async () => {
+  const d = await loggedInWorkdir();
+  fs.writeFileSync(path.join(d, 'pages.json'), JSON.stringify(authPages({}, { customer: { ...AUTH.customer, loggedIn: '#not-on-the-page' } })));
+  const r = await shoot(d);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /not logged in as "customer" \(#not-on-the-page is not on the page\)/);
+  assert.deepEqual(files(d), []);
+});
+test('login: a wrong password fails clearly, saves nothing and does not print the password', async () => {
+  const d = workdir(authPages());
+  const r = await vrIn(d, ['--login', 'customer', site.main], { ...CREDS, VR_CUSTOMER_PASSWORD: 'not-the-password-QQ7' });
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /did not reach a page with #account-menu within 15 seconds/);
+  assert.ok(!(r.stdout + r.stderr).includes('not-the-password-QQ7'));
+  assert.ok(!fs.existsSync(session(d)));
+});
+test('login: a missing credential names the environment variable, never a value', async () => {
+  const d = workdir(authPages());
+  const r = await vrIn(d, ['--login', 'customer', site.main], { VR_CUSTOMER_USER: site.user.email, VR_CUSTOMER_PASSWORD: '' });
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /Set VR_CUSTOMER_PASSWORD \(the "PASSWORD" for the "customer" login\)/);
+  assert.ok(!r.stderr.includes(site.user.email));
+  assert.ok(!fs.existsSync(session(d)));
+});
+test('login: an unknown profile, and a call with missing arguments, are errors that say what is known', async () => {
+  const d = workdir(authPages());
+  let r = await vrIn(d, ['--login', 'nobody', site.main], CREDS);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /No login profile "nobody" in pages\.json \(known: customer\)/);
+  r = await vrIn(d, ['--login', 'constructor', site.main], CREDS);               // a name every object has is still not a profile
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /No login profile "constructor"/);
+  r = await vrIn(d, ['--login', 'customer'], CREDS);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /usage: vr\.sh --login <profile> \[--manual\] <base-url>/);
+});
+test('login: VR_<PROFILE>_STATE (the session as JSON, or a path to it) works with no file on disk', async () => {
+  const d = await loggedInWorkdir();
+  const json = fs.readFileSync(session(d), 'utf8');
+  const elsewhere = path.join(ROOT, 'elsewhere-session.json');
+  fs.writeFileSync(elsewhere, json);
+  fs.rmSync(path.dirname(session(d)), { recursive: true });
+  for (const value of [json, elsewhere]) {
+    fs.rmSync(path.join(d, 'out'), { recursive: true, force: true });
+    const r = await shoot(d, site.main, { VR_CUSTOMER_STATE: value });
+    assert.equal(r.code, 0, r.stderr);
+    assert.deepEqual(files(d), ['desktop__account__0.png']);
+  }
+  const bad = await shoot(d, site.main, { VR_CUSTOMER_STATE: '{not json' });
+  assert.notEqual(bad.code, 0);
+  assert.match(bad.stderr, /saved session for "customer" is not readable \(VR_CUSTOMER_STATE must be a session as JSON/);
+  assert.ok(!bad.stderr.includes('not json'));
+});
+test('login: --manual waits for the loggedIn marker (here a page that signs in by itself) and saves the session', async () => {
+  const d = workdir(authPages({}, { customer: { ...AUTH.customer, loginUrl: '/login-manual' } }));
+  const r = await vrIn(d, ['--login', 'customer', '--manual', site.main], { VR_LOGIN_HEADLESS: '1' });
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /Waiting up to 5 minutes for #account-menu/);
+  assert.equal(fs.statSync(session(d)).mode & 0o777, 0o600);
+  assert.equal((await shoot(d)).code, 0);
+  assert.deepEqual(files(d), ['desktop__account__0.png']);
+});
+if (process.platform === 'linux') test('login: --manual with no display says so instead of failing inside the browser', async () => {
+  const d = workdir(authPages());
+  const r = await vrIn(d, ['--login', 'customer', '--manual', site.main], { DISPLAY: '', WAYLAND_DISPLAY: '', VR_LOGIN_HEADLESS: '' });
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /--manual needs a visible browser and this machine has no display/);
+});
+
+// A changed page behind a login is not sent to the judge: it fails the run (nothing else can vouch for it), unless its profile allows the judge.
+const privateRun = async (profile, pages) => {
+  await site.setMode('normal');
+  const d = workdir({ ...ONE, auth: profile, pages });
+  assert.equal((await vrIn(d, ['--login', 'customer', site.main], CREDS)).code, 0);
+  assert.equal((await vrIn(d, ['--record', site.main])).code, 0);
+  const same = await vrIn(d, [site.main]);
+  assert.equal(same.code, 0, same.stderr + same.stdout);
+  assert.match(same.stdout, /nothing changed/);
+  await site.setMode('broken');
+  return d;
+};
+test('vr.sh: a changed page behind a login is never sent to the judge, and fails the run with a report that says why', async () => {
+  const d = await privateRun(AUTH, [{ path: '/account', auth: 'customer' }]);
+  const r = await vrIn(d, [site.main]);
+  await site.setMode('normal');
+  assert.equal(r.code, 1, r.stderr + r.stdout);
+  assert.ok(!fs.existsSync(path.join(d, 'claude.log')), 'the judge was called for a page behind a login');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(d, 'private.json'))), ['desktop__account__0.png']);
+  const [entry] = JSON.parse(fs.readFileSync(path.join(d, 'report.json')));
+  assert.deepEqual([entry.file, entry.severity, entry.verdict, entry.judge_skipped], ['desktop__account__0.png', 3, 'fail', true]);
+  const html = fs.readFileSync(path.join(d, 'report', 'index.html'), 'utf8');
+  assert.match(html, /FAIL/);
+  assert.match(html, /Not sent to the judge: this page is behind a login/);
+});
+test('vr.sh: public pages still go to the judge, and a profile with "judge": true sends its pages too', async () => {
+  let d = await privateRun(AUTH, ['/shop', { path: '/account', auth: 'customer' }]);
+  fs.writeFileSync(path.join(d, 'claude.out'), JSON.stringify([{ file: 'desktop__shop__0.png', verdict: 'pass', severity: 0, seen: 'the shop page', findings: [] }]));
+  let r = await vrIn(d, [site.main]);
+  await site.setMode('normal');
+  assert.equal(r.code, 1, r.stderr + r.stdout);                      // the page behind the login changed, and nobody vouches for it
+  const prompt = fs.readFileSync(path.join(d, 'claude.log'), 'utf8');
+  assert.match(prompt, /desktop__shop__0\.png/);
+  assert.ok(!prompt.includes('desktop__account__0.png'), 'a page behind a login was named to the judge');
+
+  d = await privateRun({ customer: { ...AUTH.customer, judge: true } }, [{ path: '/account', auth: 'customer' }]);
+  fs.writeFileSync(path.join(d, 'claude.out'), JSON.stringify([{ file: 'desktop__account__0.png', verdict: 'pass', severity: 1, seen: 'the account page', findings: [] }]));
+  r = await vrIn(d, [site.main]);
+  await site.setMode('normal');
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.match(fs.readFileSync(path.join(d, 'claude.log'), 'utf8'), /desktop__account__0\.png/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(d, 'private.json'))), []);
 });
 
 // ---- run them

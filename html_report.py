@@ -115,6 +115,8 @@ def card(n, filename, entry, warns, pct):
         if 'rechecked' in entry:
             first = entry.get('first_severity')
             notes.append(f'Re-checked on its own ({e(entry["rechecked"])}); first severity: {e("none" if first is None else first)}.')
+        if entry.get('judge_skipped'):
+            notes.append('Not sent to the judge: this page is behind a login. It fails the run because nothing has checked what changed.')
         if 'severity_raw' in entry:
             notes.append(f'The judge wrote an unreadable severity: {e(json.dumps(entry["severity_raw"]))}.')
         if 'judge_severity' in entry:

@@ -12,6 +12,16 @@ export async function startSite() {
   let mainUrl = '';
   let otherUrl = '';
 
+  // A login: the test account signs in at /login (a form), gets a cookie, and /account and /orders need it.
+  const TEST_USER = { email: 'tester@example.com', password: 's3cret-pw-9XZ' };
+  const sessions = new Set();
+  let authedHits = 0;
+  let nextSession = 0;
+  const newSession = () => { const sid = `s${++nextSession}-${Math.random().toString(36).slice(2)}`; sessions.add(sid); return sid; };
+  const loggedIn = req => sessions.has(/(?:^|;\s*)sid=([^;]+)/.exec(req.headers.cookie || '')?.[1]);
+  const loginPage = message => page(`<nav>Sign in</nav><h1>Sign in</h1><p>${message}</p>
+    <form method="post" action="/login"><input id="email" name="email"><input id="password" name="password" type="password"><button type="submit">Sign in</button></form>`);
+
   const send = (res, status, body, type = 'text/html') => { res.statusCode = status; res.setHeader('content-type', type); res.end(body); };
   const redirect = (res, to) => { res.statusCode = 302; res.setHeader('location', to); res.end(); };
 
@@ -19,7 +29,33 @@ export async function startSite() {
     const url = new URL(req.url, 'http://x');
     const path = url.pathname;
     visited.add(path);
+    if (req.method === 'POST' && path === '/login') {
+      let body = '';
+      req.on('data', c => { body += c; });
+      req.on('end', () => {
+        const f = new URLSearchParams(body);
+        if (f.get('email') === TEST_USER.email && f.get('password') === TEST_USER.password) {
+          res.setHeader('set-cookie', `sid=${newSession()}; Path=/; HttpOnly`);
+          return redirect(res, '/account');
+        }
+        send(res, 200, loginPage('Invalid email or password'));
+      });
+      return;
+    }
     switch (path) {
+      case '/login':
+        return send(res, 200, loginPage(''));
+      case '/account': case '/orders':
+        if (!loggedIn(req)) return redirect(res, '/login');
+        authedHits++;
+        return send(res, 200, page(`<nav id="account-menu">Signed in as ${TEST_USER.email}</nav><h1>${path === '/account' ? 'Your account' : 'Your orders'}</h1>`
+          + (mode === 'broken' ? '' : '<div class="hero"><p>Order #1001 has shipped.</p></div>')));
+      case '/login-manual':    // stands in for a person signing in at an identity provider: a moment later, they are in
+        return send(res, 200, page('<nav>Identity provider</nav><h1>Signing you in...</h1>',
+          `<script>setTimeout(()=>{document.cookie="sid=${newSession()}; path=/";location.href="/account"},400)</script>`));
+      case '/__expire':        // every session stops being valid
+        sessions.clear();
+        return send(res, 200, 'ok', 'text/plain');
       case '/':
         return send(res, 200, page(`<nav>home</nav><h1>Home</h1>
           <a href="/about/">about</a> <a href="/logout">logout</a> <a href="/gone">gone</a> <a href="/old">old</a>
@@ -76,7 +112,8 @@ export async function startSite() {
   mainUrl = `http://127.0.0.1:${mainPort}`;
   otherUrl = `http://127.0.0.1:${otherPort}`;
   return {
-    main: mainUrl, other: otherUrl, visited,
+    main: mainUrl, other: otherUrl, visited, user: TEST_USER, authedHits: () => authedHits,
+    expireSessions: async () => { sessions.clear(); },
     setMode: async m => { mode = m; },
     close: () => Promise.all([mainServer, otherServer].map(s => new Promise(r => { s.closeAllConnections?.(); s.close(r); }))),
   };

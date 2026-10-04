@@ -2,14 +2,26 @@
 # vr.sh --record <base-url>   capture the known-good build as the baseline
 # vr.sh --discover <base-url> list linked and sitemap pages that are not in pages.json (changes nothing)
 # vr.sh <base-url>            capture the build under test and compare it to the baseline
+# vr.sh --login <profile> [--manual] <base-url>   log in once for pages behind a login (see pages.json "auth") and save the session
 # The baseline only changes when you --record, so a bad deploy cannot become the new normal.
 set -e
 cd "$(dirname "$0")"
 
+if [ "$1" = "--login" ]; then
+  [ $# -ge 1 ] && shift
+  PROFILE=$1; [ $# -ge 1 ] && shift
+  MANUAL=0; if [ "$1" = "--manual" ]; then MANUAL=1; shift; fi
+  if [ -z "$PROFILE" ] || [ -z "$1" ]; then
+    echo "usage: vr.sh --login <profile> [--manual] <base-url>" >&2
+    exit 2
+  fi
+  PROFILE=$PROFILE MANUAL=$MANUAL BASE_URL=$1 exec node login.mjs
+fi
+
 RECORD=0; DISCOVER=0
 if [ "$1" = "--record" ]; then RECORD=1; shift; elif [ "$1" = "--discover" ]; then DISCOVER=1; shift; fi
 if [ -z "$1" ]; then
-  echo "usage: vr.sh [--record | --discover] <base-url>" >&2
+  echo "usage: vr.sh [--record | --discover] <base-url>   |   vr.sh --login <profile> [--manual] <base-url>" >&2
   exit 2
 fi
 URL=$1
@@ -32,7 +44,7 @@ if [ -z "$(ls -A baseline 2>/dev/null)" ]; then
   exit 2
 fi
 
-rm -rf current changed.json blank.json diffs.json report.json warnings.json raw_report.txt raw_report.*.txt recheck.*.txt first.json suspects.json judge_errors.json judge.tmp diff report
+rm -rf current changed.json blank.json private.json diffs.json report.json warnings.json raw_report.txt raw_report.*.txt recheck.*.txt first.json suspects.json judge_errors.json judge.tmp diff report
 OUT=current BASE_URL=$URL node shoot.mjs
 node filter.mjs
 
@@ -45,14 +57,15 @@ if [ "$(tr -d ' \n' < changed.json)" = "[]" ]; then
 fi
 
 # Pass 1: the judge gets a few screenshot pairs per call (VR_BATCH, default 6), because on long lists it has been seen
-# to skim past obviously broken pages. --tools Read leaves the judge no tool but Read (--allowedTools would only pre-approve
+# to skim past obviously broken pages. Pages behind a login stay out of the list unless their profile says "judge": true. --tools Read leaves the judge no tool but Read (--allowedTools would only pre-approve
 # it), so text inside a screenshot cannot make it run anything. VR_MODEL pins the model.
 BATCH=${VR_BATCH:-6}
 mkdir judge.tmp
-node -e "console.log(require('./changed.json').join('\n'))" | split -l "$BATCH" - judge.tmp/files_
+node -e "const p=new Set(require('./private.json')); const f=require('./changed.json').filter(x=>!p.has(x)); if(f.length) console.log(f.join('\n'))" | split -l "$BATCH" - judge.tmp/files_
 : > raw_report.txt
 n=0
 for f in judge.tmp/files_*; do
+  [ -e "$f" ] || continue          # nothing to judge: every changed page is behind a login the judge may not see
   n=$((n+1))
   list=$(paste -sd' ' "$f")
   claude -p "Read rubric.md. For each of these files: $list -- compare \

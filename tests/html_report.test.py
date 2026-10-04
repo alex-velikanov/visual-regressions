@@ -197,6 +197,17 @@ class ReportTests(unittest.TestCase):
         self.assertIn('img/baseline/desktop__home__0.png', page)
         self.assertNotIn('PASS', page)
 
+    def test_a_private_page_says_it_was_not_sent_to_the_judge_and_still_fails(self):
+        self.put('changed.json', ['desktop__account__0.png'])
+        self.images('desktop__account__0.png')
+        self.put('report.json', [{'file': 'desktop__account__0.png', 'verdict': 'fail', 'severity': 3, 'judge_skipped': True,
+                                  'findings': [{'what': 'This page is behind a login and is not sent to the judge', 'where': 'entire page', 'confidence': 'high'}]}])
+        page = self.run_report()
+        self.assertIn('FAIL', page)
+        self.assertIn('Not sent to the judge: this page is behind a login', page)
+        self.assertEqual(page.count('class="card fail'), 1)
+        self.assertNotIn('No usable verdict', page)
+
     def test_malformed_judge_errors_are_ignored(self):
         self.put('changed.json', ['desktop__home__0.png'])
         for value in [{'a': 1}, 'text', [1, 'x', None], [{'file': 'f', 'reply': 7}]]:
