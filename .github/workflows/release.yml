@@ -1,0 +1,28 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag to create, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: The version is well formed and not taken
+        run: |
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version must look like v1.2.3"; exit 1; }
+          if git ls-remote --exit-code --tags origin "refs/tags/$VERSION" >/dev/null; then echo "$VERSION already exists"; exit 1; fi
+      - run: ./test.sh fast
+      - name: Tag this commit and publish the release
+        run: gh release create "$VERSION" --target "$GITHUB_SHA" --title "$VERSION" --generate-notes
