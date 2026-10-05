@@ -50,6 +50,21 @@ for (const exists of [true, false]) {
     }
   });
 }
+for (const exists of [true, false]) {
+  test(`saving replaces a session-file symlink to ${exists ? 'an existing' : 'a missing'} target, never writing through it`, () => {
+    const profile = exists ? 'linked-existing' : 'linked-missing';
+    const file = statePath(profile);
+    const target = path.join(dir, exists ? 'session-target' : 'session-missing');
+    if (exists) fs.writeFileSync(target, 'keep this content\n');
+    fs.symlinkSync(target, file);
+    saveSession(profile, SESSION);
+    assert.ok(!fs.lstatSync(file).isSymbolicLink());
+    assert.deepEqual(loadSession(profile, {}), SESSION);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    if (exists) assert.equal(fs.readFileSync(target, 'utf8'), 'keep this content\n');
+    else assert.ok(!fs.existsSync(target), 'the symlink target was created');
+  });
+}
 test('no session anywhere is null, not an error (shoot.mjs turns it into "run vr.sh --login")', () => {
   assert.equal(loadSession('nobody', {}), null);
 });

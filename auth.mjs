@@ -32,7 +32,9 @@ export function saveSession(profile, state) {
     flag: fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
   });
   const file = statePath(profile);
-  fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
+  // Remove first, then create exclusively: a symlink at this path is replaced, never followed to its target.
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600, flag: 'wx' });
   fs.chmodSync(file, 0o600);
   return file;
 }
