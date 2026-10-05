@@ -33,6 +33,15 @@ test('saving over an existing session keeps it private', () => {
   saveSession('customer', SESSION);
   assert.equal(fs.statSync(statePath('customer')).mode & 0o777, 0o600);
 });
+test('a serialization failure preserves the existing saved session', () => {
+  const file = saveSession('serialization', SESSION);
+  const saved = fs.readFileSync(file, 'utf8');
+  const circular = {};
+  circular.self = circular;
+  assert.throws(() => saveSession('serialization', circular), TypeError);
+  assert.equal(fs.readFileSync(file, 'utf8'), saved);
+  assert.deepEqual(loadSession('serialization', {}), SESSION);
+});
 for (const exists of [true, false]) {
   test(`saving rejects a .gitignore symlink to ${exists ? 'an existing' : 'a missing'} target without writing it`, () => {
     const ignore = path.join(dir, '.auth', '.gitignore');
