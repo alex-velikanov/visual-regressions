@@ -481,7 +481,7 @@ const listing = d => fs.readdirSync(d).sort();
 
 test('VR_DATA: login, record and compare with the code and the project\'s data in different folders', async () => {
   await site.setMode('normal');
-  const dirs = splitWorkdir({ ...ONE, auth: AUTH, pages: ['/shop', { path: '/account', auth: 'customer' }] });
+  const dirs = splitWorkdir({ ...ONE, auth: AUTH, pages: ['/', '/shop', { path: '/account', auth: 'customer' }] });
   const before = listing(dirs.tool);
   let r = await vrSplit(dirs, ['--login', 'customer', site.main], CREDS);
   assert.equal(r.code, 0, r.stderr + r.stdout);
@@ -489,7 +489,7 @@ test('VR_DATA: login, record and compare with the code and the project\'s data i
   assert.equal(fs.statSync(session).mode & 0o777, 0o600);
   r = await vrSplit(dirs, ['--record', site.main]);
   assert.equal(r.code, 0, r.stderr + r.stdout);
-  assert.deepEqual(files(dirs.data, 'baseline'), ['desktop__account__0.png', 'desktop__shop__0.png']);
+  assert.deepEqual(files(dirs.data, 'baseline'), ['desktop__account__0.png', 'desktop__home__0.png', 'desktop__shop__0.png']);
   r = await vrSplit(dirs, [site.main]);
   assert.equal(r.code, 0, r.stderr + r.stdout);
   assert.match(r.stdout, /nothing changed/);
@@ -498,7 +498,8 @@ test('VR_DATA: login, record and compare with the code and the project\'s data i
   r = await vrSplit(dirs, ['--discover', site.main]);                                              // discover reads the data folder's pages.json too
   assert.equal(r.code, 0, r.stderr);
   assert.ok(!r.stdout.includes('/from-the-tool-folder'));
-  assert.ok(r.stdout.split('\n').includes('/tall'));
+  assert.ok(r.stdout.split('\n').includes('/tall'), r.stdout);                                   // found by crawling the data folder's pages
+  assert.ok(!r.stdout.split('\n').includes('/shop'));                                              // and one it already lists is not proposed again
 });
 
 // ---- run them
