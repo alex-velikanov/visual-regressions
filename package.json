@@ -1,5 +1,5 @@
 {
-  "name": "test-project-vr",
+  "name": "visual-regressions",
   "private": true,
   "type": "module",
   "dependencies": {

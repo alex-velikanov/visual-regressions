@@ -3,7 +3,7 @@
 # (runN/vr/raw_report.txt), report.json, changed.json and score.txt, then print how often each case is flagged.
 # Uses plan tokens: about 1.5 minutes and one `claude -p` call per run. env: VR_MODEL, CHROMIUM_PATH as for run.sh.
 set -uo pipefail
-HERE="$(cd "$(dirname "$0")" && pwd)"; VRSRC="$HERE/../../../modules/web/root/vr"
+HERE="$(cd "$(dirname "$0")" && pwd)"; VRSRC="$HERE/../.."
 N="${1:?usage: repeat.sh <runs> <out dir>}"; OUT="$(mkdir -p "${2:?usage: repeat.sh <runs> <out dir>}" && cd "$2" && pwd)"
 mkdir -p "$OUT/deps"; cp "$VRSRC/package.json" "$OUT/deps/"
 (cd "$OUT/deps" && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --no-audit --no-fund >/dev/null 2>&1)
