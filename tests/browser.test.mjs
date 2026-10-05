@@ -29,7 +29,9 @@ function workdir(pages) {
   return d;
 }
 const run = (cmd, args, cwd, env = {}) => new Promise(resolve => {
-  execFile(cmd, args, { cwd, env: { ...process.env, ...env }, timeout: 90000 }, (err, stdout, stderr) =>
+  const childEnv = { ...process.env, ...env };
+  if (!('VR_DATA' in env)) delete childEnv.VR_DATA;           // never inherit the caller's: it may be a real project's data folder
+  execFile(cmd, args, { cwd, env: childEnv, timeout: 90000 }, (err, stdout, stderr) =>
     resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, stdout, stderr }));
 });
 const shoot = (d, base = site.main, env = {}) => run('node', ['shoot.mjs'], d, { BASE_URL: base, OUT: 'out', ...env });
@@ -468,6 +470,19 @@ test('vr.sh: a state that can no longer be reached fails the run and leaves the 
 });
 
 // ---- the tool's code and a project's data in separate folders (VR_DATA)
+test('VR_DATA: a VR_DATA in the caller\'s environment never reaches the tests\' commands, but one a test sets does', async () => {
+  const decoy = fs.mkdtempSync(path.join(ROOT, 'decoy-'));
+  const before = process.env.VR_DATA;
+  process.env.VR_DATA = decoy;
+  try {
+    const inherited = await run('bash', ['-c', 'echo "[${VR_DATA-unset}]"'], ROOT);
+    assert.equal(inherited.stdout.trim(), '[unset]');
+    const explicit = await run('bash', ['-c', 'echo "[${VR_DATA-unset}]"'], ROOT, { VR_DATA: '/explicit' });
+    assert.equal(explicit.stdout.trim(), '[/explicit]');
+  } finally {
+    if (before === undefined) delete process.env.VR_DATA; else process.env.VR_DATA = before;
+  }
+});
 function splitWorkdir(pages) {
   const tool = workdir(['/from-the-tool-folder']);                       // the code, with a pages.json that must never be used
   const data = fs.mkdtempSync(path.join(ROOT, 'data-'));
@@ -487,6 +502,7 @@ test('VR_DATA: login, record and compare with the code and the project\'s data i
   assert.equal(r.code, 0, r.stderr + r.stdout);
   const session = path.join(dirs.data, '.auth', 'customer.json');
   assert.equal(fs.statSync(session).mode & 0o777, 0o600);
+  assert.equal(fs.readFileSync(path.join(dirs.data, '.auth', '.gitignore'), 'utf8'), '*\n');          // the login ignores itself in git
   r = await vrSplit(dirs, ['--record', site.main]);
   assert.equal(r.code, 0, r.stderr + r.stdout);
   assert.deepEqual(files(dirs.data, 'baseline'), ['desktop__account__0.png', 'desktop__home__0.png', 'desktop__shop__0.png']);

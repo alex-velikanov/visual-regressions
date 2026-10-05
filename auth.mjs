@@ -26,6 +26,8 @@ export function loadSession(profile, env = process.env) {
 export function saveSession(profile, state) {
   fs.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
   fs.chmodSync(AUTH_DIR, 0o700);
+  // A session is a live login. This folder ignores itself, so it cannot be committed by accident wherever the data folder is.
+  fs.writeFileSync(path.join(AUTH_DIR, '.gitignore'), '*\n');
   const file = statePath(profile);
   fs.writeFileSync(file, JSON.stringify(state), { mode: 0o600 });
   fs.chmodSync(file, 0o600);

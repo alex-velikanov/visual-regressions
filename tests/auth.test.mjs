@@ -87,6 +87,18 @@ test('with VR_DATA a saved session goes in the data folder\'s .auth, and the cod
   assert.equal(withData(data, 'auth.mjs', "JSON.stringify(m.loadSession('moved', {}))"), '{"cookies":[]}');
 });
 
+test('the session folder ignores itself in git, wherever it is, so a live login cannot be committed by accident', () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-git-'));
+  assert.equal(spawnSync('git', ['init', '-q'], { cwd: data }).status, 0);
+  const saved = withData(data, 'auth.mjs', "m.saveSession('gitcase', { cookies: [{ name: 'sid', value: 'secret' }] })");
+  assert.equal(fs.readFileSync(path.join(data, '.auth', '.gitignore'), 'utf8'), '*\n');
+  assert.equal(spawnSync('git', ['check-ignore', '-q', saved], { cwd: data }).status, 0, 'git would commit the session');
+  fs.writeFileSync(path.join(data, 'pages.json'), '[]');
+  spawnSync('git', ['add', '-A'], { cwd: data });
+  const staged = spawnSync('git', ['diff', '--cached', '--name-only'], { cwd: data, encoding: 'utf8' }).stdout.split('\n').filter(Boolean);
+  assert.deepEqual(staged, ['pages.json']);                       // `git add -A` takes the project's files and leaves the login behind
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
   try { fn(); console.log(`ok   ${name}`); } catch (e) { failed++; console.log(`FAIL ${name}\n     ${e.message}`); }
