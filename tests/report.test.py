@@ -219,8 +219,34 @@ class SeverityTests(unittest.TestCase):
         self.write('changed.json', ['a'])
         self.run_report('merge')
         self.assertNotIn('judge_skipped', self.read('first.json')[0])
-        self.write('private.json', {'not': 'a list'})                # malformed: ignored, not a crash
+        for malformed in [{'a': 1}, 'a', 5, [1, None]]:               # malformed: ignored, never read as file names
+            self.write('private.json', malformed)
+            self.run_report('merge')
+            entry = self.read('first.json')
+            self.assertEqual([r['file'] for r in entry], ['a'])
+            self.assertNotIn('judge_skipped', entry[0])
+
+    def test_a_baseline_screenshot_with_no_page_left_gets_a_warning_that_never_changes_the_exit_code(self):
+        self.write('raw_report.1.txt', [{'file': 'old', 'severity': 0, 'verdict': 'pass', 'seen': 'the old page', 'findings': []}])
+        self.write('changed.json', ['old'])
+        self.write('orphans.json', ['old'])
         self.run_report('merge')
+        self.run_report('final')                                        # severity 0: exit 0, whatever the warnings say
+        warnings = self.read('warnings.json')
+        self.assertEqual([w['file'] for w in warnings], ['old'])
+        self.assertIn('belongs to no page in pages.json any more', warnings[0]['warning'])
+        self.assertIn('"judge": false', warnings[0]['warning'])
+        self.assertIn('Re-record the baseline', warnings[0]['warning'])
+
+    def test_no_orphans_no_warning_and_a_malformed_orphans_file_is_ignored(self):
+        self.write('raw_report.1.txt', [{'file': 'a', 'severity': 0, 'verdict': 'pass', 'seen': 'page', 'findings': []}])
+        self.write('changed.json', ['a'])
+        for value in [None, [], {'a': 1}, 'text', [1, None]]:
+            if value is not None:
+                self.write('orphans.json', value)
+            self.run_report('merge')
+            self.run_report('final')
+            self.assertEqual(self.read('warnings.json'), [], value)
 
     def test_readable_severities_are_not_suspects(self):
         for value in [0, 2, 3, 5, '4', 2.9, 0.0]:

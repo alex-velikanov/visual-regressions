@@ -11,6 +11,7 @@ A file is a suspect when the judge gave no verdict for it, did not say what it s
 are re-judged, to bound the cost; the rest get a warning. The second opinion can only raise a severity, never lower it.
 Separately, a page that went blank always fails, and a page still passed with VR_WARN_DIFF_PCT (default 50) % or more
 of its pixels differing gets a warning. Warnings never change the exit code.
+A changed file listed in orphans.json (a baseline screenshot whose page is gone, with a "judge": false profile in use) also gets a warning.
 """
 import glob, json, os, re, sys
 
@@ -18,6 +19,8 @@ DEC = json.JSONDecoder()
 MAX_REPLY = 20000        # how much of an unreadable judge reply is kept for the HTML report
 PRIVATE_NOTE = {'what': 'This page is behind a login and is not sent to the judge, so nothing has checked what changed. Compare the images yourself, then re-record if the change is intended.',
                 'where': 'entire page', 'confidence': 'high'}
+ORPHAN_WARNING = ('This baseline screenshot belongs to no page in pages.json any more (the page was renamed or removed). If it was a page of '
+                  'a login profile with "judge": false, its old image was sent to the judge anyway. Re-record the baseline after renaming or removing a page.')
 FIRST_NOTE = {'what': 'The page is blank (one flat colour) where the baseline was not.', 'where': 'entire page', 'confidence': 'high'}
 
 
@@ -105,7 +108,8 @@ def merge():
     report = list(by_file.values())
 
     # A changed page the judge may not see (private.json) fails the run: nothing else can vouch for it.
-    private = [f for f in load('private.json', []) if isinstance(f, str)]
+    listed = load('private.json', [])
+    private = [f for f in (listed if isinstance(listed, list) else []) if isinstance(f, str)]
     report = [r for r in report if r.get('file') not in private]
     for f in private:
         r = {'file': f, 'verdict': 'fail', 'severity': 3, 'findings': [PRIVATE_NOTE], 'judge_skipped': True, 'judge_incomplete': False}
@@ -209,6 +213,11 @@ def final():
             warnings.append({'file': f, 'warning': 'The judge returned no verdict for this file.'})
         elif (r.get('severity', 0) or 0) < 3 and diffs.get(f, 0) >= warn_pct:
             warnings.append({'file': f, 'warning': f"{diffs[f]}% of pixels differ but the judge gave severity {r.get('severity', 0)}. Look at it yourself."})
+
+    orphans = load('orphans.json', [])
+    for f in orphans if isinstance(orphans, list) else []:
+        if isinstance(f, str):
+            warnings.append({'file': f, 'warning': ORPHAN_WARNING})
 
     json.dump(report, open('report.json', 'w'), indent=2)
     json.dump(warnings, open('warnings.json', 'w'), indent=2)

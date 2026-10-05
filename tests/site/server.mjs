@@ -16,6 +16,7 @@ export async function startSite() {
   const TEST_USER = { email: 'tester@example.com', password: 's3cret-pw-9XZ' };
   const sessions = new Set();
   let authedHits = 0;
+  const beacons = [];      // what the pages report back about the actions that ran in them
   let nextSession = 0;
   const newSession = () => { const sid = `s${++nextSession}-${Math.random().toString(36).slice(2)}`; sessions.add(sid); return sid; };
   const loggedIn = req => sessions.has(/(?:^|;\s*)sid=([^;]+)/.exec(req.headers.cookie || '')?.[1]);
@@ -53,6 +54,38 @@ export async function startSite() {
       case '/login-manual':    // stands in for a person signing in at an identity provider: a moment later, they are in
         return send(res, 200, page('<nav>Identity provider</nav><h1>Signing you in...</h1>',
           `<script>setTimeout(()=>{document.cookie="sid=${newSession()}; path=/";location.href="/account"},400)</script>`));
+      // ---- pages with states that only steps can reach. The "-open" twins show the same state with no action needed,
+      // so a test can compare screenshots byte for byte.
+      case '/modal': case '/modal-open': {
+        const open = path === '/modal-open';
+        return send(res, 200, page(`<nav>modal</nav><h1>Product</h1>
+          ${mode === 'broken' && !open ? '' : `<button id="open" style="visibility:${open ? 'hidden' : 'visible'}" onclick="this.style.visibility='hidden';document.getElementById('dlg').style.display='block';localStorage.setItem('opened','1');fetch('/__beacon?e=modal-open')">Details</button>`}
+          <div id="dlg" role="dialog" style="display:${open ? 'block' : 'none'};margin:20px;padding:20px;border:3px solid #123;background:#fed">Free returns within 30 days</div>`));
+      }
+      case '/storage-set':     // leaves something behind in this browser
+        return send(res, 200, page('<nav>storage</nav><h1>Setting it</h1>', '<script>localStorage.setItem("opened","1")</script>'));
+      case '/storage-check':   // shows whether an earlier page left something behind in this browser
+        return send(res, 200, page('<nav>storage</nav><h1 id="r"></h1>', '<script>addEventListener("DOMContentLoaded",()=>{document.getElementById("r").textContent=localStorage.getItem("opened")?"state leaked":"clean"})</script>'));
+      case '/menu': case '/menu-open': {
+        const open = path === '/menu-open';
+        return send(res, 200, page(`<nav>menu</nav><div id="item" class="${open ? 'open' : ''}" style="padding:20px;font-size:24px" onmouseenter="fetch('/__beacon?e=hover')">Products
+          <div id="sub" style="display:none;margin:10px 0 0;padding:10px;background:#cde">Shoes</div></div>`,
+          '<style>#item:hover #sub,#item.open #sub{display:block!important}</style>'));
+      }
+      case '/search':          // the input is off screen, so its focus ring never shows: only the echoed text does
+        return send(res, 200, page('<nav>search</nav><input id="q" style="position:absolute;left:-9999px"><h1 id="echo">Type a query</h1>',
+          '<script>addEventListener("DOMContentLoaded",()=>{const q=document.getElementById("q");q.addEventListener("keydown",e=>{if(e.key==="Enter"){document.getElementById("echo").textContent="Results for "+q.value;fetch("/__beacon?e="+encodeURIComponent("search:"+q.value))}})})</script>'));
+      case '/search-done':
+        return send(res, 200, page('<nav>search</nav><h1 id="echo">Results for shoes</h1>'));
+      case '/size':
+        return send(res, 200, page('<nav>size</nav><select id="size" onchange="document.getElementById(\'chosen\').textContent=\'Size: \'+this.value;fetch(\'/__beacon?e=size:\'+this.value)"><option value="S">Small</option><option value="M">Medium</option><option value="L">Large</option></select><h1 id="chosen">Size: S</h1>'));
+      case '/greeting':        // differs for a logged-in visitor, and has the account menu a login profile looks for
+        return send(res, 200, page(loggedIn(req)
+          ? `<nav id="account-menu">Signed in as ${TEST_USER.email}</nav><h1>Hello, tester</h1>`
+          : '<nav>Guest</nav><h1>Sign in to see your orders</h1>'));
+      case '/__beacon':
+        beacons.push(url.searchParams.get('e'));
+        return send(res, 200, 'ok', 'text/plain');
       case '/__expire':        // every session stops being valid
         sessions.clear();
         return send(res, 200, 'ok', 'text/plain');
@@ -114,6 +147,7 @@ export async function startSite() {
   return {
     main: mainUrl, other: otherUrl, visited, user: TEST_USER, authedHits: () => authedHits,
     expireSessions: async () => { sessions.clear(); },
+    beacons: () => [...beacons], clearBeacons: () => { beacons.length = 0; },
     setMode: async m => { mode = m; },
     close: () => Promise.all([mainServer, otherServer].map(s => new Promise(r => { s.closeAllConnections?.(); s.close(r); }))),
   };

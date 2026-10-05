@@ -44,7 +44,7 @@ if [ -z "$(ls -A baseline 2>/dev/null)" ]; then
   exit 2
 fi
 
-rm -rf current changed.json blank.json private.json diffs.json report.json warnings.json raw_report.txt raw_report.*.txt recheck.*.txt first.json suspects.json judge_errors.json judge.tmp diff report
+rm -rf current changed.json blank.json private.json orphans.json diffs.json report.json warnings.json raw_report.txt raw_report.*.txt recheck.*.txt first.json suspects.json judge_errors.json judge.tmp diff report
 OUT=current BASE_URL=$URL node shoot.mjs
 node filter.mjs
 

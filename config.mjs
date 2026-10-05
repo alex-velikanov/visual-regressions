@@ -13,6 +13,14 @@
 //   "expectStatus": 404           the HTTP status the page should return (default: any status below 400)
 //   "maxTiles": 8                 allow a taller page (default 6 screenshots per page and viewport; more is an error)
 //   "auth": "customer"            shoot this page logged in, as that profile (see "auth" below)
+//   "name": "cart-open"           a name for this screenshot, used in its file name (default: made from the path). The same
+//                                 path can be listed more than once under different names: logged out and in, or in different states.
+//   "steps": [ { "click": "#cart" }, { "waitFor": ".cart-drawer" } ]
+//                                 actions run after the page loads and before the screenshot: open a menu or dialog, fill a form,
+//                                 trigger an error state. Each page with steps gets its own fresh browser, so one state cannot leak
+//                                 into the next. One action per step:
+//       { "click": "<css>" }   { "hover": "<css>" }   { "waitFor": "<css>" }   { "press": "Enter" }   { "wait": 500 }  (ms, at most 10000)
+//       { "fill": { "selector": "<css>", "value": "text" } }   { "select": { "selector": "<css>", "value": "option value or label" } }
 // Top level: "maxTiles" sets that default for every page.
 // Top level "auth" defines login profiles for pages behind a login:
 //   "auth": { "customer": { "loginUrl": "/login", "fields": { "#email": "$USER", "#password": "$PASSWORD" },
@@ -35,10 +43,13 @@ export function slug(path) {
 }
 
 export function fileName(target, tile) {
-  return `${target.viewport}__${slug(target.path)}__${tile}.png`;
+  return `${target.viewport}__${target.name ?? slug(target.path)}__${tile}.png`;
 }
 
 export const DEFAULT_MAX_TILES = 6;
+export const MAX_STEPS = 20;
+export const MAX_WAIT_MS = 10000;
+const STEP_ACTIONS = ['click', 'hover', 'fill', 'select', 'press', 'waitFor', 'wait'];
 
 // The environment variable that holds one of a profile's secrets: envName('customer', 'USER') is VR_CUSTOMER_USER.
 export function envName(profile, suffix) {
@@ -86,6 +97,35 @@ function checkOptions(p) {
   if (p.maxTiles !== undefined && (!Number.isInteger(p.maxTiles) || p.maxTiles < 1)) throw new Error(`page "${p.path}": maxTiles must be a positive integer`);
 }
 
+const nonEmpty = v => typeof v === 'string' && v.trim() !== '';
+
+// steps: a list of 1 to MAX_STEPS objects, each with exactly one action (see the header).
+function checkSteps(p) {
+  if (p.steps === undefined) return;
+  const at = `page "${p.path}"${p.name ? ` (${p.name})` : ''}`;
+  if (!Array.isArray(p.steps) || p.steps.length === 0 || p.steps.length > MAX_STEPS) {
+    throw new Error(`${at}: steps must be a list of 1 to ${MAX_STEPS} actions`);
+  }
+  p.steps.forEach((step, i) => {
+    const n = i + 1;
+    const keys = step !== null && typeof step === 'object' && !Array.isArray(step) ? Object.keys(step) : [];
+    if (keys.length !== 1 || !STEP_ACTIONS.includes(keys[0])) {
+      throw new Error(`${at}: step ${n} must be an object with exactly one of: ${STEP_ACTIONS.join(', ')}`);
+    }
+    const [action] = keys;
+    const v = step[action];
+    if (['click', 'hover', 'waitFor'].includes(action) && !nonEmpty(v)) throw new Error(`${at}: step ${n}: ${action} must be a CSS selector string`);
+    if (action === 'press' && !nonEmpty(v)) throw new Error(`${at}: step ${n}: press must be a key name such as "Enter"`);
+    if (action === 'wait' && !(Number.isInteger(v) && v >= 0 && v <= MAX_WAIT_MS)) throw new Error(`${at}: step ${n}: wait must be a whole number of milliseconds, 0 to ${MAX_WAIT_MS}`);
+    if (action === 'fill' || action === 'select') {
+      const shaped = v !== null && typeof v === 'object' && !Array.isArray(v) && Object.keys(v).sort().join() === 'selector,value';
+      if (!shaped || !nonEmpty(v.selector) || typeof v.value !== 'string' || (action === 'select' && v.value === '')) {
+        throw new Error(`${at}: step ${n}: ${action} must be { "selector": "<css>", "value": "<text>" }`);
+      }
+    }
+  });
+}
+
 export function resolveTargets(raw) {
   const cfg = Array.isArray(raw) ? { pages: raw } : raw;
   if (!cfg || !Array.isArray(cfg.pages) || cfg.pages.length === 0) {
@@ -112,6 +152,10 @@ export function resolveTargets(raw) {
       throw new Error(`page path must be a string starting with "/": ${JSON.stringify(page)}`);
     }
     checkOptions(p);
+    if (p.name !== undefined && (typeof p.name !== 'string' || !/^[a-z0-9][a-z0-9_-]*$/i.test(p.name))) {
+      throw new Error(`page "${p.path}": name must be letters, digits, "-" or "_" (it becomes part of the screenshot file name)`);
+    }
+    checkSteps(p);
     if (p.auth !== undefined && (typeof p.auth !== 'string' || !Object.hasOwn(profiles, p.auth))) {
       throw new Error(`page "${p.path}": auth must name a profile defined under "auth" (known: ${Object.keys(profiles).join(', ') || 'none'})`);
     }
@@ -120,13 +164,15 @@ export function resolveTargets(raw) {
     }
     for (const name of p.viewports ?? names) {
       if (!viewports[name]) throw new Error(`page "${p.path}" uses unknown viewport "${name}" (known: ${names.join(', ')})`);
-      const key = `${name}__${slug(p.path)}`;
-      if (seen.has(key)) throw new Error(`page "${p.path}" is listed twice for viewport "${name}" (or its name collides with another path)`);
+      const pageName = p.name ?? slug(p.path);
+      const key = `${name}__${pageName}`;
+      if (seen.has(key)) throw new Error(`page "${p.path}" is listed twice for viewport "${name}" (or its name collides with another page): give one of them a "name"`);
       seen.add(key);
       targets.push({
         path: p.path, viewport: name, ...viewports[name],
         waitFor: p.waitFor, mask: p.mask ?? [], expectStatus: p.expectStatus,
         maxTiles: p.maxTiles ?? cfg.maxTiles ?? DEFAULT_MAX_TILES,
+        name: pageName, steps: p.steps ?? [],
         auth: p.auth,
         private: p.auth !== undefined && !profiles[p.auth].judge,    // behind a login whose profile says "judge": false
       });

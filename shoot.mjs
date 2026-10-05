@@ -3,6 +3,7 @@ import fs from 'fs';
 import { resolveTargets, resolveAuth, fileName } from './config.mjs';
 import { joinUrl } from './links.mjs';
 import { loadSession, assertLoggedIn } from './auth.mjs';
+import { runSteps } from './steps.mjs';
 
 const base  = process.env.BASE_URL;
 const out   = process.env.OUT;
@@ -21,8 +22,10 @@ const browser = await launchBrowser();
 fs.mkdirSync(out, { recursive: true });
 
 // One browser context per viewport and login: size, touch, mobile emulation and the session are set per context.
-for (const key of new Set(targets.map(t => `${t.viewport}\n${t.auth ?? ''}`))) {
-  const group = targets.filter(t => `${t.viewport}\n${t.auth ?? ''}` === key);
+// A page with steps gets a context of its own, so what its steps change (a cart, a dismissed banner) cannot leak into the next page.
+const contextKey = t => `${t.viewport}\n${t.auth ?? ''}\n${t.steps.length ? t.name : ''}`;
+for (const key of new Set(targets.map(contextKey))) {
+  const group = targets.filter(t => contextKey(t) === key);
   const { width, height, mobile, auth } = group[0];
   const ctx = await browser.newContext({
     viewport: { width, height },
@@ -40,6 +43,7 @@ for (const key of new Set(targets.map(t => `${t.viewport}\n${t.auth ?? ''}`))) {
       throw new Error(`${where} returned HTTP ${status || '(no response)'}${t.expectStatus ? `, expected ${t.expectStatus}` : ''}`);
     }
     if (t.auth) await assertLoggedIn(page, t.auth, profiles[t.auth], where);
+    if (t.steps.length) await runSteps(page, t.steps, where);
     if (t.waitFor) await page.waitForSelector(t.waitFor, { timeout: 10000 });
     await page.evaluate(() => document.fonts.ready);
 

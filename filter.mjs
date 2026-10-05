@@ -1,7 +1,7 @@
 import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 import fs from 'fs';
-import { resolveTargets, slug } from './config.mjs';
+import { resolveTargets, resolveAuth } from './config.mjs';
 
 // A screenshot is "changed" if it exists on only one side, its size differs, or more than
 // MIN_DIFF_PX pixels differ. An absolute pixel count (not a % of the image) so a small but
@@ -22,13 +22,16 @@ function isBlank(png) {
   return top / px.length >= BLANK_SHARE;
 }
 
-// Pages behind a login whose profile does not allow the judge ("judge": true): their screenshots are never sent to the
-// model. vr.sh leaves them out of the judge's list and report.py fails the run if one of them changed.
-const privateTargets = resolveTargets(JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url)))).filter(t => t.private);
-const isPrivate = f => privateTargets.some(t => {
-  const prefix = `${t.viewport}__${slug(t.path)}__`;
+// Pages behind a login whose profile says "judge": false: their screenshots are never sent to the model. vr.sh leaves them
+// out of the judge's list and report.py fails the run if one of them changed.
+const rawConfig = JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url)));
+const targets = resolveTargets(rawConfig);
+const belongsTo = (t, f) => {
+  const prefix = `${t.viewport}__${t.name}__`;
   return f.startsWith(prefix) && /^\d+\.png$/.test(f.slice(prefix.length));
-});
+};
+const isPrivate = f => targets.some(t => t.private && belongsTo(t, f));
+const hasOptOut = Object.values(resolveAuth(rawConfig)).some(profile => !profile.judge);
 
 // diff/<file>: where the two screenshots differ, for each same-size changed pair (the HTML report shows it).
 fs.rmSync('diff', { recursive: true, force: true });
@@ -60,5 +63,9 @@ for (const f of all) {
 fs.writeFileSync('changed.json', JSON.stringify(changed, null, 2));
 fs.writeFileSync('blank.json', JSON.stringify(blank, null, 2));
 fs.writeFileSync('private.json', JSON.stringify(changed.filter(isPrivate), null, 2));
+// A baseline screenshot that belongs to no page in pages.json any more (a page was renamed or removed) cannot be known to be private,
+// so it would go to the judge even if the page it came from opted out. Only worth saying when a profile opts out at all.
+const orphans = hasOptOut ? changed.filter(f => !fs.existsSync(`current/${f}`) && !targets.some(t => belongsTo(t, f))) : [];
+fs.writeFileSync('orphans.json', JSON.stringify(orphans, null, 2));
 fs.writeFileSync('diffs.json', JSON.stringify(diffPct, null, 2));
 console.log(`${changed.length} changed of ${all.length}${blank.length ? `, ${blank.length} gone blank` : ''}`);

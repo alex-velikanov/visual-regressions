@@ -18,7 +18,7 @@ const site = await startSite();
 // ---- helpers
 function workdir(pages) {
   const d = fs.mkdtempSync(path.join(ROOT, 'w-'));
-  for (const f of ['vr.sh', 'filter.mjs', 'config.mjs', 'links.mjs', 'browser.mjs', 'shoot.mjs', 'discover.mjs', 'auth.mjs', 'login.mjs', 'report.py', 'html_report.py', 'rubric.md']) {
+  for (const f of ['vr.sh', 'filter.mjs', 'config.mjs', 'links.mjs', 'browser.mjs', 'shoot.mjs', 'discover.mjs', 'auth.mjs', 'login.mjs', 'steps.mjs', 'report.py', 'html_report.py', 'rubric.md']) {
     if (fs.existsSync(path.join(VR, f))) fs.copyFileSync(path.join(VR, f), path.join(d, f));
   }
   fs.mkdirSync(path.join(d, 'bin'));
@@ -371,6 +371,100 @@ test('vr.sh: a page behind a login goes to the judge like any other, and only "j
   assert.match(prompt, /desktop__shop__0\.png/);
   assert.ok(!prompt.includes('desktop__account__0.png'), 'a page behind a login was named to the judge');
 
+});
+
+// ---- steps and names (steps.mjs; shoot.mjs and vr.sh with pages that have them)
+const withSteps = (pagePath, steps, extra = {}) => ({ ...ONE, pages: [{ path: pagePath, steps, ...extra }] });
+const shot = async (pages, env = {}) => { const d = workdir(pages); return { d, r: await shoot(d, site.main, env) }; };
+const same = (a, fileA, b, fileB) => bytes(a.d, fileA).equals(bytes(b.d, fileB));
+
+test('steps: a click opens a dialog, and the screenshot is the same as a page where the dialog is already open', async () => {
+  site.clearBeacons();
+  const clicked = await shot(withSteps('/modal', [{ click: '#open' }]));
+  assert.equal(clicked.r.code, 0, clicked.r.stderr);
+  assert.deepEqual(site.beacons(), ['modal-open']);                         // the click really happened in the page
+  const open = await shot({ ...ONE, pages: ['/modal-open'] });
+  const closed = await shot({ ...ONE, pages: ['/modal'] });
+  assert.ok(same(clicked, 'desktop__modal__0.png', open, 'desktop__modal_open__0.png'), 'the dialog does not look like the open one');
+  assert.ok(!same(clicked, 'desktop__modal__0.png', closed, 'desktop__modal__0.png'), 'the click changed nothing');
+});
+test('steps: hover shows a menu', async () => {
+  site.clearBeacons();
+  const hovered = await shot(withSteps('/menu', [{ hover: '#item' }]));
+  assert.equal(hovered.r.code, 0, hovered.r.stderr);
+  assert.deepEqual(site.beacons(), ['hover']);
+  const open = await shot({ ...ONE, pages: ['/menu-open'] });
+  const plain = await shot({ ...ONE, pages: ['/menu'] });
+  assert.ok(same(hovered, 'desktop__menu__0.png', open, 'desktop__menu_open__0.png'));
+  assert.ok(!same(hovered, 'desktop__menu__0.png', plain, 'desktop__menu__0.png'));
+});
+test('steps: fill then press Enter run in order', async () => {
+  site.clearBeacons();
+  const searched = await shot(withSteps('/search', [{ fill: { selector: '#q', value: 'shoes' } }, { press: 'Enter' }]));
+  assert.equal(searched.r.code, 0, searched.r.stderr);
+  assert.deepEqual(site.beacons(), ['search:shoes']);
+  const done = await shot({ ...ONE, pages: ['/search-done'] });
+  assert.ok(same(searched, 'desktop__search__0.png', done, 'desktop__search_done__0.png'), 'the results do not look like the finished search');
+});
+test('steps: select picks an option', async () => {
+  site.clearBeacons();
+  const chosen = await shot(withSteps('/size', [{ select: { selector: '#size', value: 'L' } }]));
+  assert.equal(chosen.r.code, 0, chosen.r.stderr);
+  assert.deepEqual(site.beacons(), ['size:L']);
+  const plain = await shot({ ...ONE, pages: ['/size'] });
+  assert.ok(!same(chosen, 'desktop__size__0.png', plain, 'desktop__size__0.png'));
+});
+test('steps: a waitFor step waits for content that arrives late', async () => {
+  const waited = await shot(withSteps('/late', [{ waitFor: '#late' }]));
+  assert.equal(waited.r.code, 0, waited.r.stderr);
+  const final = await shot({ ...ONE, pages: ['/late-final'] });
+  assert.ok(same(waited, 'desktop__late__0.png', final, 'desktop__late_final__0.png'));
+});
+test('steps: a step that cannot run stops the run, names the step, and never prints what was typed', async () => {
+  for (const [steps, expected] of [
+    [[{ fill: { selector: '#q', value: 'secret-typed-9Q' } }, { click: '#nope' }], /\/search \[desktop\]: step 2 \(click "#nope"\) failed/],
+    [[{ fill: { selector: '#nope', value: 'secret-typed-9Q' } }], /\/search \[desktop\]: step 1 \(fill "#nope"\) failed/],
+  ]) {
+    const { d, r } = await shot(withSteps('/search', steps), { VR_STEP_TIMEOUT_MS: '1500' });
+    assert.notEqual(r.code, 0);
+    assert.match(r.stderr, expected);
+    assert.ok(!r.stderr.includes('secret-typed-9Q') && !r.stdout.includes('secret-typed-9Q'), 'a typed value was printed');
+    assert.deepEqual(files(d), []);
+  }
+});
+test('steps: what a page\'s steps change does not leak into the next page', async () => {
+  const clean = await shot({ ...ONE, pages: ['/storage-check'] });
+  const afterSteps = await shot({ ...ONE, pages: [{ path: '/modal', steps: [{ click: '#open' }] }, '/storage-check'] });
+  assert.equal(afterSteps.r.code, 0, afterSteps.r.stderr);
+  assert.ok(same(clean, 'desktop__storage_check__0.png', afterSteps, 'desktop__storage_check__0.png'), 'the click left state behind in the next page');
+  // the check can see a leak: a page that sets the flag with no steps shares its browser with the next one
+  const leaky = await shot({ ...ONE, pages: ['/storage-set', '/storage-check'] });
+  assert.ok(!same(clean, 'desktop__storage_check__0.png', leaky, 'desktop__storage_check__0.png'), 'the test cannot tell a leak from a clean page');
+});
+test('name: the same path can be shot twice under different names, logged out and logged in', async () => {
+  const d = await loggedInWorkdir({ ...ONE, auth: AUTH, pages: ['/greeting', { path: '/greeting', name: 'greeting-in', auth: 'customer' }] });
+  const r = await shoot(d);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(files(d), ['desktop__greeting-in__0.png', 'desktop__greeting__0.png']);
+  assert.ok(!bytes(d, 'desktop__greeting-in__0.png').equals(bytes(d, 'desktop__greeting__0.png')), 'logged in and logged out look the same');
+});
+test('vr.sh: a state that can no longer be reached fails the run and leaves the baseline alone', async () => {
+  await site.setMode('normal');
+  const d = workdir(withSteps('/modal', [{ click: '#open' }], { name: 'dialog-open' }));
+  const vr = args => vrIn(d, args, { VR_STEP_TIMEOUT_MS: '1500' });
+  let r = await vr(['--record', site.main]);
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.deepEqual(files(d, 'baseline'), ['desktop__dialog-open__0.png']);
+  const before = bytes(d, 'desktop__dialog-open__0.png', 'baseline');
+  r = await vr([site.main]);
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /nothing changed/);
+  await site.setMode('broken');                                              // the button is gone
+  r = await vr([site.main]);
+  await site.setMode('normal');
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /\/modal \[desktop\]: step 1 \(click "#open"\) failed/);
+  assert.ok(bytes(d, 'desktop__dialog-open__0.png', 'baseline').equals(before), 'the baseline changed');
 });
 
 // ---- run them
