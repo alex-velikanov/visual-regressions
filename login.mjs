@@ -3,11 +3,12 @@ import fs from 'fs';
 import { launchBrowser } from './browser.mjs';
 import { resolveAuth } from './config.mjs';
 import { login } from './auth.mjs';
+import { dataPath } from './paths.mjs';
 
 const profile = process.env.PROFILE;
 const base = process.env.BASE_URL;
 const manual = process.env.MANUAL === '1';
-const profiles = resolveAuth(JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url))));
+const profiles = resolveAuth(JSON.parse(fs.readFileSync(dataPath('pages.json'))));
 const cfg = Object.hasOwn(profiles, profile) ? profiles[profile] : undefined;
 if (!cfg) {
   console.error(`No login profile "${profile}" in pages.json (known: ${Object.keys(profiles).join(', ') || 'none'}).`);

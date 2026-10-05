@@ -1,4 +1,5 @@
 import { launchBrowser } from './browser.mjs';
+import { dataPath } from './paths.mjs';
 import fs from 'fs';
 import { resolveTargets, resolveAuth, fileName } from './config.mjs';
 import { joinUrl } from './links.mjs';
@@ -7,7 +8,7 @@ import { runSteps } from './steps.mjs';
 
 const base  = process.env.BASE_URL;
 const out   = process.env.OUT;
-const raw = JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url)));
+const raw = JSON.parse(fs.readFileSync(dataPath('pages.json')));
 const targets = resolveTargets(raw);
 const profiles = resolveAuth(raw);
 

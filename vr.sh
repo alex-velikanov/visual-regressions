@@ -4,8 +4,25 @@
 # vr.sh <base-url>            capture the build under test and compare it to the baseline
 # vr.sh --login <profile> [--manual] <base-url>   log in once for pages behind a login (see pages.json "auth") and save the session
 # The baseline only changes when you --record, so a bad deploy cannot become the new normal.
+# The tool's code can live anywhere. A project's data (pages.json, baseline/, .auth/, the run's files and report/) lives in VR_DATA,
+# which defaults to the folder this script is in, so a project that keeps the two together needs to set nothing.
 set -e
-cd "$(dirname "$0")"
+TOOL="$(cd "$(dirname "$0")" && pwd)"
+DATA="${VR_DATA:-$TOOL}"
+if [ ! -d "$DATA" ]; then
+  echo "VR_DATA is not a folder: $DATA" >&2
+  exit 2
+fi
+DATA="$(cd "$DATA" && pwd)"
+export VR_DATA="$DATA"
+export PYTHONDONTWRITEBYTECODE=1     # python would otherwise leave a __pycache__ next to the code
+cd "$DATA"
+need_pages() {
+  if [ ! -f pages.json ]; then
+    echo "No pages.json in $DATA. Create one there (see the vr docs), or set VR_DATA to the folder that has it." >&2
+    exit 2
+  fi
+}
 
 if [ "$1" = "--login" ]; then
   [ $# -ge 1 ] && shift
@@ -15,7 +32,8 @@ if [ "$1" = "--login" ]; then
     echo "usage: vr.sh --login <profile> [--manual] <base-url>" >&2
     exit 2
   fi
-  PROFILE=$PROFILE MANUAL=$MANUAL BASE_URL=$1 exec node login.mjs
+  need_pages
+  PROFILE=$PROFILE MANUAL=$MANUAL BASE_URL=$1 exec node "$TOOL/login.mjs"
 fi
 
 RECORD=0; DISCOVER=0
@@ -25,15 +43,16 @@ if [ -z "$1" ]; then
   exit 2
 fi
 URL=$1
+need_pages
 
 if [ "$DISCOVER" = 1 ]; then
-  BASE_URL=$URL exec node discover.mjs
+  BASE_URL=$URL exec node "$TOOL/discover.mjs"
 fi
 
 if [ "$RECORD" = 1 ]; then
   trap 'rm -rf baseline.new' EXIT
   rm -rf baseline.new
-  OUT=baseline.new BASE_URL=$URL node shoot.mjs
+  OUT=baseline.new BASE_URL=$URL node "$TOOL/shoot.mjs"
   rm -rf baseline && mv baseline.new baseline
   echo "baseline recorded: $(ls baseline | wc -l | tr -d ' ') screenshots"
   exit 0
@@ -45,20 +64,22 @@ if [ -z "$(ls -A baseline 2>/dev/null)" ]; then
 fi
 
 rm -rf current changed.json blank.json private.json orphans.json diffs.json report.json warnings.json raw_report.txt raw_report.*.txt recheck.*.txt first.json suspects.json judge_errors.json judge.tmp diff report
-OUT=current BASE_URL=$URL node shoot.mjs
-node filter.mjs
+OUT=current BASE_URL=$URL node "$TOOL/shoot.mjs"
+node "$TOOL/filter.mjs"
 
 if [ "$(tr -d ' \n' < changed.json)" = "[]" ]; then
   echo "[]" > report.json
   echo "[]" > warnings.json
   echo "0 pages compared, nothing changed"
-  VR_REPORT_URL=$URL python3 html_report.py || echo "(could not write the HTML report)" >&2
+  VR_REPORT_URL=$URL python3 "$TOOL/html_report.py" || echo "(could not write the HTML report)" >&2
   exit 0
 fi
 
 # Pass 1: the judge gets a few screenshot pairs per call (VR_BATCH, default 6), because on long lists it has been seen
-# to skim past obviously broken pages. Pages behind a login stay out of the list unless their profile says "judge": true. --tools Read leaves the judge no tool but Read (--allowedTools would only pre-approve
+# to skim past obviously broken pages. Pages behind a login stay out of the list only when their profile says "judge": false. --tools Read leaves the judge no tool but Read (--allowedTools would only pre-approve
 # it), so text inside a screenshot cannot make it run anything. VR_MODEL pins the model.
+# The rubric is the project's own if it has one in its data folder, else the tool's.
+if [ -f rubric.md ]; then RUBRIC=rubric.md; else RUBRIC="$TOOL/rubric.md"; fi
 BATCH=${VR_BATCH:-6}
 mkdir judge.tmp
 node -e "const p=new Set(require('./private.json')); const f=require('./changed.json').filter(x=>!p.has(x)); if(f.length) console.log(f.join('\n'))" | split -l "$BATCH" - judge.tmp/files_
@@ -68,7 +89,7 @@ for f in judge.tmp/files_*; do
   [ -e "$f" ] || continue          # nothing to judge: every changed page is behind a login the judge may not see
   n=$((n+1))
   list=$(paste -sd' ' "$f")
-  claude -p "Read rubric.md. For each of these files: $list -- compare \
+  claude -p "Read $RUBRIC. For each of these files: $list -- compare \
 baseline/<file> against current/<file> and apply the rubric. Print ONLY a \
 JSON array as [{file, verdict, severity, seen, findings}] to stdout — no prose, \
 no markdown fences. seen is one short sentence saying what the current page \
@@ -83,15 +104,15 @@ rm -rf judge.tmp
 # again on its own, independently. The second opinion can only raise a severity. See report.py for the rules and caps.
 # If a reply has no readable verdict there is nothing to re-check: write the HTML report (it shows the replies) and stop.
 rc=0
-python3 report.py merge || rc=$?
+python3 "$TOOL/report.py" merge || rc=$?
 if [ "$rc" != 0 ]; then
-  VR_REPORT_URL=$URL python3 html_report.py || echo "(could not write the HTML report)" >&2
+  VR_REPORT_URL=$URL python3 "$TOOL/html_report.py" || echo "(could not write the HTML report)" >&2
   exit $rc
 fi
 n=0
-for file in $(python3 report.py suspects); do
+for file in $(python3 "$TOOL/report.py" suspects); do
   n=$((n+1))
-  claude -p "Read rubric.md. Compare baseline/$file against current/$file and apply the rubric. \
+  claude -p "Read $RUBRIC. Compare baseline/$file against current/$file and apply the rubric. \
 Look at both images closely; this is an independent second look. Print ONLY a JSON array with one object \
 [{file, verdict, severity, seen, findings}] — no prose, no markdown fences. seen is one short sentence \
 saying what the current page shows." \
@@ -100,6 +121,6 @@ done
 
 # Final report: the blank-page guard and warnings (see report.py) are applied here. Exit 1 at severity 3 or above.
 # Then the HTML report (report/index.html), which is written whatever the verdict.
-python3 report.py final || rc=$?
-VR_REPORT_URL=$URL python3 html_report.py || echo "(could not write the HTML report)" >&2
+python3 "$TOOL/report.py" final || rc=$?
+VR_REPORT_URL=$URL python3 "$TOOL/html_report.py" || echo "(could not write the HTML report)" >&2
 exit $rc

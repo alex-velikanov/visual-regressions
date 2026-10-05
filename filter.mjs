@@ -2,6 +2,7 @@ import { PNG } from 'pngjs';
 import pixelmatch from 'pixelmatch';
 import fs from 'fs';
 import { resolveTargets, resolveAuth } from './config.mjs';
+import { dataPath } from './paths.mjs';
 
 // A screenshot is "changed" if it exists on only one side, its size differs, or more than
 // MIN_DIFF_PX pixels differ. An absolute pixel count (not a % of the image) so a small but
@@ -24,7 +25,7 @@ function isBlank(png) {
 
 // Pages behind a login whose profile says "judge": false: their screenshots are never sent to the model. vr.sh leaves them
 // out of the judge's list and report.py fails the run if one of them changed.
-const rawConfig = JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url)));
+const rawConfig = JSON.parse(fs.readFileSync(dataPath('pages.json')));
 const targets = resolveTargets(rawConfig);
 const belongsTo = (t, f) => {
   const prefix = `${t.viewport}__${t.name}__`;

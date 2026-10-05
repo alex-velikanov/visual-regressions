@@ -4,11 +4,11 @@
 // Nothing here ever prints a credential or a session.
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { envName } from './config.mjs';
+import { dataPath } from './paths.mjs';
 import { joinUrl } from './links.mjs';
 
-const AUTH_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '.auth');
+const AUTH_DIR = dataPath('.auth');
 export const statePath = profile => path.join(AUTH_DIR, `${profile}.json`);
 
 export function loadSession(profile, env = process.env) {

@@ -5,12 +5,13 @@
 import { launchBrowser } from './browser.mjs';
 import fs from 'fs';
 import { resolveTargets } from './config.mjs';
+import { dataPath } from './paths.mjs';
 import { normalizeLink, shouldSkip, parseSitemap, newPaths, joinUrl } from './links.mjs';
 
 const base = process.env.BASE_URL.replace(/\/+$/, '');   // links are normalised against it, so no trailing slash
 const maxDepth = Number(process.env.DISCOVER_DEPTH ?? 2);
 const maxPages = Number(process.env.DISCOVER_MAX ?? 50);
-const raw = JSON.parse(fs.readFileSync(new URL('./pages.json', import.meta.url)));
+const raw = JSON.parse(fs.readFileSync(dataPath('pages.json')));
 const ignore = (Array.isArray(raw) ? [] : raw.discover?.ignore) ?? [];
 const listed = [...new Set(resolveTargets(raw).map(t => t.path))];
 
