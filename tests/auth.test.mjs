@@ -11,6 +11,8 @@ import { pathToFileURL } from 'node:url';
 const SRC = path.resolve(process.argv[2]);
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vr-auth-'));
 for (const f of ['auth.mjs', 'config.mjs', 'links.mjs', 'paths.mjs']) fs.copyFileSync(path.join(SRC, f), path.join(dir, f));
+// A VR_DATA in the caller's environment must never send these tests' sessions into a real project's .auth.
+delete process.env.VR_DATA;
 const { loadSession, saveSession, statePath, credentials } = await import(pathToFileURL(path.join(dir, 'auth.mjs')));
 
 const tests = [];
