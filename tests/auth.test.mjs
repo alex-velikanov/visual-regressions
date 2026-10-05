@@ -31,6 +31,25 @@ test('saving over an existing session keeps it private', () => {
   saveSession('customer', SESSION);
   assert.equal(fs.statSync(statePath('customer')).mode & 0o777, 0o600);
 });
+for (const exists of [true, false]) {
+  test(`saving rejects a .gitignore symlink to ${exists ? 'an existing' : 'a missing'} target without writing it`, () => {
+    const ignore = path.join(dir, '.auth', '.gitignore');
+    const target = path.join(dir, exists ? 'existing-target' : 'missing-target');
+    if (exists) fs.writeFileSync(target, 'keep this content\n');
+    fs.unlinkSync(ignore);
+    fs.symlinkSync(target, ignore);
+    try {
+      assert.throws(() => saveSession('symlink', SESSION), { code: 'ELOOP' });
+      assert.ok(fs.lstatSync(ignore).isSymbolicLink());
+      if (exists) assert.equal(fs.readFileSync(target, 'utf8'), 'keep this content\n');
+      else assert.ok(!fs.existsSync(target), 'the symlink target was created');
+      assert.ok(!fs.existsSync(statePath('symlink')), 'a session was saved despite the unsafe .gitignore');
+    } finally {
+      fs.unlinkSync(ignore);
+      fs.writeFileSync(ignore, '*\n');
+    }
+  });
+}
 test('no session anywhere is null, not an error (shoot.mjs turns it into "run vr.sh --login")', () => {
   assert.equal(loadSession('nobody', {}), null);
 });
